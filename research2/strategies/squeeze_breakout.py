@@ -32,6 +32,7 @@ def signal(df: pd.DataFrame,
            vol_mult: float = 1.2,
            atr_period: int = 56,
            trail_mult: float = 3.0,
+           target_r: float = 0.0,
            max_hold: int = 192) -> pd.Series:
     close = df["close"]
 
@@ -63,26 +64,32 @@ def signal(df: pd.DataFrame,
     pos = np.zeros(n)
     state = 0
     stop = 0.0
+    entry = 0.0
+    risk = 0.0
     held = 0
     for t in range(n):
         if state == 1:
             held += 1
             stop = max(stop, c[t] - trail_mult * a[t])
-            if c[t] < stop or held >= max_hold:
+            if c[t] >= entry + risk:          # 1R in favor -> breakeven floor
+                stop = max(stop, entry)
+            if (c[t] < stop or held >= max_hold
+                    or (target_r > 0 and c[t] >= entry + target_r * risk)):
                 state = 0
         elif state == -1:
             held += 1
             stop = min(stop, c[t] + trail_mult * a[t])
-            if c[t] > stop or held >= max_hold:
+            if c[t] <= entry - risk:
+                stop = min(stop, entry)
+            if (c[t] > stop or held >= max_hold
+                    or (target_r > 0 and c[t] <= entry - target_r * risk)):
                 state = 0
         if state == 0 and not np.isnan(a[t]):
-            if long_sig[t]:
-                state = 1
-                stop = c[t] - trail_mult * a[t]
-                held = 0
-            elif short_sig[t]:
-                state = -1
-                stop = c[t] + trail_mult * a[t]
+            if long_sig[t] or short_sig[t]:
+                state = 1 if long_sig[t] else -1
+                entry = c[t]
+                risk = trail_mult * a[t]
+                stop = entry - state * risk
                 held = 0
         pos[t] = state
     return pd.Series(pos, index=df.index)
@@ -91,10 +98,11 @@ def signal(df: pd.DataFrame,
 PARAM_GRID = {
     "bb_period": [80],
     "squeeze_lookback": [960],
-    "squeeze_pct": [0.2, 0.3],
-    "arm_window": [8, 24],
-    "breakout_len": [16, 32],
-    "vol_mult": [1.0, 1.4],
+    "squeeze_pct": [0.25, 0.4],
+    "arm_window": [16, 48],
+    "breakout_len": [12, 24],
+    "vol_mult": [1.0, 1.3],
     "trail_mult": [2.0, 3.0],
-    "max_hold": [96, 192],
+    "target_r": [0.0, 1.5, 3.0],
+    "max_hold": [192],
 }
