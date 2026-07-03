@@ -106,6 +106,53 @@ Paper state (position, simulated equity, trade log) persists in
 makes this ~20 lines for a perp) — and start with a size you can afford
 to lose entirely.
 
+## The intraday & leverage investigation (research2/)
+
+A follow-up study asked two questions: can the bot trade *faster* (multiple
+trades/day on 15m bars), and can it run at high leverage (up to the 500x
+offered by venues like PrimeXBT)?
+
+### Six intraday families, six independent agents, zero survivors
+
+Each strategy family was developed by a separate agent against a shared
+harness (`research2/harness.py`): parameters selectable only on 2021–2024,
+survival judged on untouched 2025–2026, 5 bps/side costs, ≥0.7 trades/day
+required. Results:
+
+| Family | Train Sharpe | 2025–26 Sharpe | Verdict |
+|---|---:|---:|---|
+| Opening-range breakout (US open + trend) | 1.10 | -1.17 | regime broke in 2025 |
+| VWAP-deviation reversion | 0.63 | -1.08 | edge was a 2021 artifact |
+| Intraday momentum (1–24h) | 0.63 | -1.30 | momentum inverted in 2025–26 |
+| Volatility-squeeze breakout | 0.64 | -0.32 | breakouts now fade, both sides |
+| Fast mean reversion (vol-gated RSI/z) | 0.73 | -0.61 | real edge too rare (~0.2/day); shallow entries lose to fees |
+| Multi-timeframe pullback | 0.47 | -1.10 | long-only edge, killed by chop + fees |
+
+The convergent diagnosis across agents: at intraday horizons BTC's per-trade
+gross edge is 5–15 bps against a ~10 bps round-trip cost, and the 2025–26
+regime actively *inverts* short-horizon breakout/momentum signals. Faster
+trading means paying fees more often for less edge. The hourly ensemble's
+~0.8 position adjustments/day is already at the practical frequency limit.
+
+### Leverage: what the data says about 500x
+
+Liquidation survival on 2025–26 15m data (`research2/leverage_reality.py`),
+letting each random entry take the *luckier* direction:
+
+| Leverage | Liq. distance | survive 1h | survive 4h | survive 24h |
+|---:|---:|---:|---:|---:|
+| 10x | 9.00% | 100% | 100% | 100% |
+| 50x | 1.80% | 100% | 99.7% | 94% |
+| 100x | 0.90% | 99.7% | 96.5% | 71% |
+| **500x** | **0.18%** | **75%** | **45%** | **17%** |
+
+Running the validated strategy through an isolated-margin liquidation engine
+(fees on notional, intrabar liquidation checks): profitable at 1–3x, the
+account is **wiped at 10x and above** — at 500x, 20 of 21 trades ended in
+liquidation. On 2025–26 specifically, 2x is optimal and 5x+ is net-negative
+from volatility drag. **`MAX_LEVERAGE = 2` is wired into the bot.** A 500x
+account setting is fine; a position whose notional exceeds ~2x equity is not.
+
 ## Honest limitations
 
 - **Backtest ≠ future.** The edge is a slow-moving hourly momentum effect

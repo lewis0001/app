@@ -1,14 +1,20 @@
 """Multi-timeframe pullback strategy.
 
 Higher-timeframe trend from an EMA cross on the 15m close series (spans sized
-in 15m bars, ~8h vs ~4d horizons, fully causal), optionally gated by trend
-strength measured in local-vol units. Entries are 15m pullbacks WITH a
-resumption confirmation: in an uptrend, the fast RSI must first dip below the
-entry level within the last `conf_window` bars and then cross back up through
-50 (we buy the turn of the dip, not the falling knife); mirrored for shorts
-in downtrends. Exits on a resumption target (price stretched back above/below
-the fast EMA by `target_k` vol units), trend flip, or a time stop.
-Buys dips in bulls, shorts rallies in bears — two-sided by construction.
+in 15m bars: ~8h fast vs ~4d slow, fully causal), gated by trend strength in
+local-vol units. Entries are 15m counter-trend pullbacks: fast RSI dip while
+the trend is up opens a long; fast RSI rip while the trend is down opens a
+short. Exits on trend flip, an optional resumption target (price stretched
+back beyond the fast EMA by `target_k` vol units; target_k >= 90 disables it),
+or a time stop. Buys dips in bulls, shorts rallies in bears.
+
+Research notes (honest): at the >= 0.7 trades/day the harness requires, every
+variant tested (RSI-recross exits, confirmation entries, band mean-reversion
+exits, resumption targets) is net-negative after 5 bps/side on TRAIN, and all
+variants are strongly negative on RECENT (2025-26 choppy bear). The only
+profitable TRAIN configuration is the slow flip-only exit (~0.4 trades/day),
+which is below the activity floor and still loses on RECENT. The grid below
+spans that spectrum so the harness selection is transparent.
 """
 import numpy as np
 import pandas as pd
@@ -25,9 +31,9 @@ def _rsi(close: pd.Series, period: int) -> pd.Series:
 
 
 def signal(df: pd.DataFrame, trend_fast: int = 32, trend_slow: int = 384,
-           trend_gap: float = 0.5, rsi_period: int = 6,
-           rsi_entry: float = 25.0, conf_window: int = 12,
-           target_k: float = 1.5, max_hold: int = 192) -> pd.Series:
+           trend_gap: float = 1.0, rsi_period: int = 6,
+           rsi_entry: float = 35.0, target_k: float = 99.0,
+           max_hold: int = 96) -> pd.Series:
     close = df["close"]
     ema_f = close.ewm(span=trend_fast, adjust=False).mean()
     ema_s = close.ewm(span=trend_slow, adjust=False).mean()
@@ -36,37 +42,31 @@ def signal(df: pd.DataFrame, trend_fast: int = 32, trend_slow: int = 384,
     trend = np.where(gap > trend_gap, 1, np.where(gap < -trend_gap, -1, 0))
 
     rsi = _rsi(close, rsi_period)
-    dipped = (rsi < rsi_entry).rolling(conf_window).max().fillna(0).astype(bool)
-    ripped = (rsi > 100 - rsi_entry).rolling(conf_window).max().fillna(0).astype(bool)
-    cross_up = ((rsi > 50) & (rsi.shift(1) <= 50)).to_numpy()
-    cross_dn = ((rsi < 50) & (rsi.shift(1) >= 50)).to_numpy()
-    dipped_prev = dipped.shift(1).fillna(False).to_numpy()
-    ripped_prev = ripped.shift(1).fillna(False).to_numpy()
-
-    # resumption target: price stretched beyond fast EMA by target_k vol units
+    enter_long = ((trend == 1) & (rsi < rsi_entry)).to_numpy()
+    enter_short = ((trend == -1) & (rsi > 100 - rsi_entry)).to_numpy()
     stretch = ((close - ema_f) / (ema_f * vol.replace(0, np.nan))).to_numpy()
 
     n = len(df)
     pos = np.zeros(n)
     cur = 0
-    bars_held = 0
-    warmup = max(trend_slow, 96)
-    for t in range(warmup, n):
+    held = 0
+    for t in range(max(trend_slow, 96), n):
         tr = trend[t]
+        s = stretch[t]
         if cur == 0:
-            if tr == 1 and dipped_prev[t] and cross_up[t]:
+            if enter_long[t]:
                 cur = 1
-                bars_held = 0
-            elif tr == -1 and ripped_prev[t] and cross_dn[t]:
+                held = 0
+            elif enter_short[t]:
                 cur = -1
-                bars_held = 0
+                held = 0
         elif cur == 1:
-            bars_held += 1
-            if stretch[t] > target_k or tr == -1 or bars_held >= max_hold:
+            held += 1
+            if tr == -1 or held >= max_hold or (np.isfinite(s) and s > target_k):
                 cur = 0
         else:  # cur == -1
-            bars_held += 1
-            if stretch[t] < -target_k or tr == 1 or bars_held >= max_hold:
+            held += 1
+            if tr == 1 or held >= max_hold or (np.isfinite(s) and s < -target_k):
                 cur = 0
         pos[t] = cur
     return pd.Series(pos, index=df.index)
@@ -76,9 +76,8 @@ PARAM_GRID = {
     "trend_fast": [32],
     "trend_slow": [384],
     "trend_gap": [0.5, 1.0, 2.0],
-    "rsi_period": [6],
-    "rsi_entry": [25.0, 32.0],
-    "conf_window": [12, 24],
-    "target_k": [1.5, 2.5],
-    "max_hold": [96, 192],
+    "rsi_period": [6, 10],
+    "rsi_entry": [27.0, 35.0, 40.0],
+    "target_k": [2.5, 99.0],
+    "max_hold": [96, 192, 384],
 }

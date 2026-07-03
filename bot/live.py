@@ -41,6 +41,14 @@ CONFIG = {
     "z_entry": 1.5,
     "target_vol": 0.5,
 }
+
+# Maximum effective leverage (notional / equity) supported by the data.
+# research2/leverage_reality.py + the 2025-26 sweep: 2x is optimal, 5x+ is
+# net-negative from volatility drag, 10x+ liquidates, 500x is unsurvivable
+# (83% of random entries liquidate within 24h). On a venue advertising 500x
+# (e.g. PrimeXBT), set position size so notional <= 2x account equity and
+# use isolated margin. The signal already scales itself via vol targeting.
+MAX_LEVERAGE = 2.0
 COST_PER_SIDE = 0.0008  # 8 bps fee+slippage assumption for paper fills
 HISTORY_BARS = 600      # >= z_period + max lookback + vol_period, with margin
 
