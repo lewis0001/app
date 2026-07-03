@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+bot_state.json
+.pytest_cache/
