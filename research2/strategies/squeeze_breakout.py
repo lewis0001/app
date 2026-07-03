@@ -1,13 +1,15 @@
 """Volatility squeeze breakout on 15m BTC.
 
-Idea: detect volatility compression (normalized Bollinger band width at a
-low percentile of its multi-day history), then trade the direction of the
-range break with volume confirmation. Manage the trade with an ATR trailing
-stop and a time stop. Squeezes resolve violently both ways -> long/short.
+Detect volatility compression (normalized Bollinger band width in a low
+percentile of its multi-day history), then trade the direction of the range
+break, optionally waiting for a pullback/retest of the broken level instead
+of chasing the breakout bar. Optional higher-timeframe EMA trend alignment
+and volume confirmation. Trades are managed with an ATR trailing stop,
+breakeven floor after 1R, optional R-multiple target, and a time stop.
 
-Causality: all indicator inputs at row t use only rows <= t; the breakout
-reference range and the volume baseline are shifted by one bar so the
-current bar's own extremes never define the level it must break.
+Causality: every input at row t uses only rows <= t; breakout reference
+ranges and the volume baseline are shifted one bar so the current bar's own
+extremes never define the level being broken.
 """
 import numpy as np
 import pandas as pd
@@ -26,14 +28,16 @@ def _atr(df: pd.DataFrame, period: int) -> pd.Series:
 def signal(df: pd.DataFrame,
            bb_period: int = 80,
            squeeze_lookback: int = 960,
-           squeeze_pct: float = 0.25,
-           arm_window: int = 16,
-           breakout_len: int = 24,
-           vol_mult: float = 1.2,
+           squeeze_pct: float = 0.4,
+           arm_window: int = 24,
+           breakout_len: int = 16,
+           vol_mult: float = 1.0,
            atr_period: int = 56,
            trail_mult: float = 3.0,
            target_r: float = 0.0,
-           trend_len: int = 0,
+           trend_len: int = 2688,
+           retest_atr: float = 0.0,   # >0: wait for pullback within this many ATR of the broken level
+           retest_wait: int = 64,     # max bars to wait for the retest
            max_hold: int = 192) -> pd.Series:
     close = df["close"]
 
@@ -54,8 +58,6 @@ def signal(df: pd.DataFrame,
     vol_base = df["volume"].rolling(bb_period).mean().shift(1)
     vol_ok = df["volume"] > vol_mult * vol_base
 
-    atr = _atr(df, atr_period)
-
     # --- higher-timeframe trend alignment (0 disables the filter)
     if trend_len > 0:
         ema = close.ewm(span=trend_len, adjust=False).mean()
@@ -65,14 +67,21 @@ def signal(df: pd.DataFrame,
         up_ok = pd.Series(True, index=df.index)
         dn_ok = pd.Series(True, index=df.index)
 
+    atr = _atr(df, atr_period)
+
     long_sig = (armed & brk_up & vol_ok & up_ok).to_numpy()
     short_sig = (armed & brk_dn & vol_ok & dn_ok).to_numpy()
     c = close.to_numpy()
     a = atr.to_numpy()
+    hi_np = hi.to_numpy()
+    lo_np = lo.to_numpy()
 
     n = len(df)
     pos = np.zeros(n)
-    state = 0
+    state = 0          # -1 short, 0 flat, +1 long
+    pend = 0           # pending retest direction
+    pend_level = 0.0
+    pend_age = 0
     stop = 0.0
     entry = 0.0
     risk = 0.0
@@ -95,8 +104,36 @@ def signal(df: pd.DataFrame,
                     or (target_r > 0 and c[t] <= entry - target_r * risk)):
                 state = 0
         if state == 0 and not np.isnan(a[t]):
-            if long_sig[t] or short_sig[t]:
-                state = 1 if long_sig[t] else -1
+            enter = 0
+            if retest_atr <= 0:
+                if long_sig[t]:
+                    enter = 1
+                elif short_sig[t]:
+                    enter = -1
+            else:
+                # register a fresh pending breakout (newest wins)
+                if long_sig[t]:
+                    pend, pend_level, pend_age = 1, hi_np[t], 0
+                elif short_sig[t]:
+                    pend, pend_level, pend_age = -1, lo_np[t], 0
+                elif pend != 0:
+                    pend_age += 1
+                    if pend_age > retest_wait:
+                        pend = 0
+                if pend == 1:
+                    if c[t] < pend_level - 0.5 * a[t]:   # failed breakout
+                        pend = 0
+                    elif c[t] <= pend_level + retest_atr * a[t]:
+                        enter = 1
+                        pend = 0
+                elif pend == -1:
+                    if c[t] > pend_level + 0.5 * a[t]:
+                        pend = 0
+                    elif c[t] >= pend_level - retest_atr * a[t]:
+                        enter = -1
+                        pend = 0
+            if enter != 0:
+                state = enter
                 entry = c[t]
                 risk = trail_mult * a[t]
                 stop = entry - state * risk
@@ -108,12 +145,14 @@ def signal(df: pd.DataFrame,
 PARAM_GRID = {
     "bb_period": [80],
     "squeeze_lookback": [960],
-    "squeeze_pct": [0.25, 0.4],
-    "arm_window": [24],
+    "squeeze_pct": [0.4, 0.5],
+    "arm_window": [24, 48],
     "breakout_len": [16, 32],
-    "vol_mult": [1.0, 1.3],
+    "vol_mult": [1.0],
     "trail_mult": [2.0, 3.0],
     "target_r": [0.0],
-    "trend_len": [1344, 2688],
+    "trend_len": [2688],
+    "retest_atr": [0.0, 0.5, 1.0],
+    "retest_wait": [64],
     "max_hold": [192, 384],
 }
