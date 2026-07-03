@@ -15,18 +15,19 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 API = "https://api.exchange.coinbase.com/products/{product}/candles"
-GRANULARITY = 3600  # 1 hour
+GRANULARITY = 3600  # default: 1 hour (override with --granularity)
 CHUNK = 300         # max candles per request
 
 
-def fetch_range(product: str, start: datetime, end: datetime, session: requests.Session):
+def fetch_range(product: str, start: datetime, end: datetime, session: requests.Session,
+                granularity: int = GRANULARITY):
     """Yield [time, low, high, open, close, volume] rows for [start, end)."""
     cursor = start
-    step = timedelta(seconds=GRANULARITY * CHUNK)
+    step = timedelta(seconds=granularity * CHUNK)
     while cursor < end:
         chunk_end = min(cursor + step, end)
         params = {
-            "granularity": GRANULARITY,
+            "granularity": granularity,
             "start": cursor.isoformat(),
             "end": chunk_end.isoformat(),
         }
@@ -48,6 +49,8 @@ def main():
     parser.add_argument("--product", default="BTC-USD")
     parser.add_argument("--start", default="2021-01-01")
     parser.add_argument("--out", default="data/btc_1h.csv")
+    parser.add_argument("--granularity", type=int, default=GRANULARITY,
+                        help="candle seconds: 60, 300, 900, 3600, 21600, 86400")
     args = parser.parse_args()
 
     start = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)
@@ -56,7 +59,7 @@ def main():
     session = requests.Session()
     seen = {}
     total_chunks = 0
-    for row in fetch_range(args.product, start, end, session):
+    for row in fetch_range(args.product, start, end, session, args.granularity):
         ts, low, high, open_, close, volume = row
         seen[int(ts)] = (int(ts), open_, high, low, close, volume)
         total_chunks += 1
