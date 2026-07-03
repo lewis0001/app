@@ -33,6 +33,7 @@ def signal(df: pd.DataFrame,
            atr_period: int = 56,
            trail_mult: float = 3.0,
            target_r: float = 0.0,
+           trend_len: int = 0,
            max_hold: int = 192) -> pd.Series:
     close = df["close"]
 
@@ -55,8 +56,17 @@ def signal(df: pd.DataFrame,
 
     atr = _atr(df, atr_period)
 
-    long_sig = (armed & brk_up & vol_ok).to_numpy()
-    short_sig = (armed & brk_dn & vol_ok).to_numpy()
+    # --- higher-timeframe trend alignment (0 disables the filter)
+    if trend_len > 0:
+        ema = close.ewm(span=trend_len, adjust=False).mean()
+        up_ok = close > ema
+        dn_ok = close < ema
+    else:
+        up_ok = pd.Series(True, index=df.index)
+        dn_ok = pd.Series(True, index=df.index)
+
+    long_sig = (armed & brk_up & vol_ok & up_ok).to_numpy()
+    short_sig = (armed & brk_dn & vol_ok & dn_ok).to_numpy()
     c = close.to_numpy()
     a = atr.to_numpy()
 
@@ -99,10 +109,11 @@ PARAM_GRID = {
     "bb_period": [80],
     "squeeze_lookback": [960],
     "squeeze_pct": [0.25, 0.4],
-    "arm_window": [16, 48],
-    "breakout_len": [12, 24],
+    "arm_window": [24],
+    "breakout_len": [16, 32],
     "vol_mult": [1.0, 1.3],
     "trail_mult": [2.0, 3.0],
-    "target_r": [0.0, 1.5, 3.0],
-    "max_hold": [192],
+    "target_r": [0.0],
+    "trend_len": [1344, 2688],
+    "max_hold": [192, 384],
 }
