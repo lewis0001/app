@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbital Workhouse</title>
+<style>
+  :root { --bg:#0b0f17; --panel:#121826; --line:#1f2a3d; --text:#e6edf7; --muted:#8b98ad; --accent:#7dd3fc; --good:#34d399; --bad:#f87171; --warn:#fbbf24; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5; }
+  header h1 { font-size:16px; margin:0 12px 0 0; letter-spacing:.04em; }
+  .stat { color:var(--muted); font-size:12px; } .stat b { color:var(--text); font-size:14px; display:block; }
+  button { background:#1c2740; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--accent); } button.primary { background:#0e4a6b; border-color:#1d6f9c; }
+  main { display:grid; grid-template-columns: 1.2fr 1fr; gap:14px; padding:14px 16px; }
+  @media (max-width: 1000px) { main { grid-template-columns:1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  section h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); display:flex; justify-content:space-between; align-items:center; }
+  .rooms { display:grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap:10px; }
+  .room { border:1px solid var(--line); border-radius:8px; padding:10px; background:#0f1521; }
+  .room h3 { margin:0 0 4px; font-size:14px; } .room p { margin:0 0 8px; color:var(--muted); font-size:12px; }
+  .agent { display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px dashed var(--line); }
+  .agent .mood { font-size:18px; width:24px; text-align:center; }
+  .agent .name { font-weight:600; } .agent .role { color:var(--muted); font-size:12px; }
+  .bar { height:5px; background:#1a2334; border-radius:3px; overflow:hidden; margin-top:3px; }
+  .bar i { display:block; height:100%; }
+  .airlock-item { border:1px solid #3a2f14; background:#1a1608; border-radius:8px; padding:10px; margin-bottom:10px; }
+  .airlock-item.p1 { border-color:#6b3a1a; background:#1f120a; }
+  .airlock-item h4 { margin:0 0 4px; font-size:14px; } .airlock-item .meta { color:var(--muted); font-size:12px; margin-bottom:6px; }
+  .airlock-item pre { white-space:pre-wrap; font:inherit; margin:6px 0; color:#d6deea; }
+  label { display:block; font-size:12px; color:var(--muted); margin:6px 0 2px; }
+  input, textarea, select { width:100%; background:#0b1019; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font: inherit; }
+  textarea { min-height:60px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; } th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); vertical-align:top; } th { color:var(--muted); font-weight:500; }
+  .tag { display:inline-block; padding:1px 6px; border-radius:10px; font-size:11px; background:#1c2740; color:#cbd5e1; }
+  .tag.good { background:#0f3b2e; color:var(--good);} .tag.bad { background:#3b1414; color:var(--bad);} .tag.warn { background:#3b2e0f; color:var(--warn);}
+  .feed { max-height:320px; overflow:auto; font-size:12.5px; } .feed div { padding:4px 0; border-bottom:1px solid var(--line); } .feed .t { color:var(--muted); margin-right:6px; }
+  .muted { color:var(--muted); } .small { font-size:12px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  details summary { cursor:pointer; color:var(--accent); font-size:12px; }
+  .pill-row { display:flex; gap:6px; flex-wrap:wrap; }
+  #toast { position:fixed; bottom:14px; right:14px; background:#0e4a6b; padding:8px 12px; border-radius:8px; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ORBITAL WORKHOUSE</h1>
+  <div class="stat">Tick <b id="tick">-</b></div>
+  <div class="stat">Revenue <b id="revenue">-</b></div>
+  <div class="stat">Profit <b id="profit">-</b></div>
+  <div class="stat">LLM spend <b id="llm">-</b></div>
+  <div class="stat">Mode <b id="mode">-</b></div>
+  <div class="stat">Needs you <b id="needs">-</b></div>
+  <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+    <span id="paused" class="tag bad" style="display:none">PAUSED</span>
+    <button class="primary" onclick="tick()">Run one tick</button>
+    <button id="runbtn" onclick="toggleRun()">Start auto-run</button>
+    <input id="interval" type="number" min="5" step="5" value="60" style="width:80px" title="seconds between ticks">
+  </div>
+</header>
+<main>
+  <div style="display:flex; flex-direction:column; gap:14px;">
+    <section>
+      <h2>Airlock: what only you can do <span id="airlock-count" class="tag warn"></span></h2>
+      <div id="airlock"></div>
+    </section>
+    <section>
+      <h2>Rooms and agents</h2>
+      <div class="rooms" id="rooms"></div>
+    </section>
+    <section>
+      <h2>Ventures</h2>
+      <table><thead><tr><th>Name</th><th>Stage</th><th>Rail</th><th>Gate</th><th>Revenue</th><th>Cost</th><th>Thesis</th></tr></thead><tbody id="ventures"></tbody></table>
+    </section>
+    <section>
+      <h2>Trend radar <span class="muted small">freshness x (1 - crowding) x exploitability</span></h2>
+      <table><thead><tr><th>Trend</th><th>Opp.</th><th>Fresh</th><th>Crowd</th><th>Status</th></tr></thead><tbody id="trends"></tbody></table>
+    </section>
+  </div>
+  <div style="display:flex; flex-direction:column; gap:14px;">
+    <section>
+      <h2>Bulletin board</h2>
+      <div class="feed" id="board"></div>
+    </section>
+    <section>
+      <h2>Tick log</h2>
+      <div class="feed" id="events"></div>
+    </section>
+    <section>
+      <h2>Reviews and signals</h2>
+      <div class="feed" id="reviews"></div>
+    </section>
+    <section>
+      <h2>Talk to the factory</h2>
+      <label>Broadcast a note to every agent (it is pinned to the board)</label>
+      <textarea id="note" placeholder="e.g. I have a 2k-member Discord on 3D printing. I can spend 2 hours on Saturday."></textarea>
+      <div class="pill-row" style="margin-top:6px;"><button onclick="sendNote()">Send</button></div>
+      <details style="margin-top:10px;"><summary>Your assets (what no other AI agent has)</summary>
+        <div id="operator"></div>
+        <label>Add skills (semicolon separated)</label><input id="op_skills">
+        <label>Add audiences</label><input id="op_audiences">
+        <label>Add accounts / rails</label><input id="op_accounts">
+        <label>Location / physical</label><input id="op_location">
+        <label>Proprietary assets</label><input id="op_assets">
+        <label>Hours per week</label><input id="op_hours" type="number" step="0.5">
+        <div class="pill-row" style="margin-top:6px;"><button onclick="saveOperator()">Save</button></div>
+      </details>
+      <details style="margin-top:10px;"><summary>Record revenue received outside a connector</summary>
+        <label>Amount (USD)</label><input id="rev_amount" type="number" step="0.01">
+        <label>Memo</label><input id="rev_memo">
+        <label>Venture id (optional)</label><input id="rev_venture">
+        <div class="pill-row" style="margin-top:6px;"><button onclick="recordRevenue()">Record</button></div>
+      </details>
+    </section>
+    <section>
+      <h2>Revenue rails</h2>
+      <div id="rails"></div>
+    </section>
+    <section>
+      <h2>Ledger</h2>
+      <div class="feed" id="ledger"></div>
+    </section>
+  </div>
+</main>
+<div id="toast"></div>
+<script>
+const MOOD = { energised:'🔥', content:'😊', focused:'🎯', frustrated:'😤', discouraged:'😞', overwhelmed:'🥵', 'under pressure':'😬', unsure:'🤔', restless:'😵‍💫' };
+const $ = id => document.getElementById(id);
+const usd = c => '$' + (c/100).toFixed(2);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let state = null;
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 2500); }
+
+async function api(path, method='GET', body) {
+  const r = await fetch(path, { method, headers: {'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) { const e = await r.text(); toast('Error: ' + e.slice(0,200)); throw new Error(e); }
+  return r.json();
+}
+
+async function refresh() {
+  state = await api('/api/state');
+  render();
+}
+
+function render() {
+  const s = state;
+  $('tick').textContent = s.tick;
+  $('revenue').textContent = usd(s.ledger.revenue_cents);
+  $('profit').textContent = usd(s.ledger.profit_cents);
+  $('llm').textContent = '$' + s.llm.cost_usd.toFixed(2) + ' / $' + s.llm.cap_usd.toFixed(0);
+  $('mode').textContent = s.mode + ' · ' + s.model;
+  $('needs').textContent = s.airlock.length;
+  $('paused').style.display = s.paused ? 'inline-block' : 'none';
+  $('paused').title = s.paused || '';
+  $('runbtn').textContent = s.running ? 'Stop auto-run' : 'Start auto-run';
+  $('airlock-count').textContent = s.airlock.length ? s.airlock.length + ' open' : 'all clear';
+
+  // airlock
+  $('airlock').innerHTML = s.airlock.length ? '' : '<div class="muted">Nothing waiting on you. The factory is working.</div>';
+  for (const r of s.airlock) {
+    const div = document.createElement('div');
+    div.className = 'airlock-item p' + r.priority;
+    let fields = '';
+    for (const f of r.fields) {
+      const id = `f_${r.id}_${f.name}`;
+      if (f.type === 'choice') fields += `<label>${esc(f.label)}</label><select id="${id}">${f.choices.map(c => `<option>${esc(c)}</option>`).join('')}</select>`;
+      else if (f.type === 'textarea') fields += `<label>${esc(f.label)}</label><textarea id="${id}"></textarea>`;
+      else fields += `<label>${esc(f.label)}${f.required ? '' : ' (optional)'}</label><input id="${id}" type="${f.type==='secret'?'password':(f.type==='number'?'number':'text')}">`;
+    }
+    if (!r.fields.length) fields = `<label>Your answer</label><textarea id="f_${r.id}_answer"></textarea>`;
+    div.innerHTML = `<h4>${esc(r.title)} <span class="tag">${esc(r.type)}</span> <span class="tag ${r.priority<=1?'bad':(r.priority<=2?'warn':'')}">priority ${r.priority}</span></h4>
+      <div class="meta">requested at tick ${r.tick} by ${esc(agentName(r.requested_by))}${r.why_it_matters ? ' · ' + esc(r.why_it_matters) : ''}</div>
+      <pre>${esc(r.description)}</pre>${fields}
+      <div class="pill-row" style="margin-top:8px;"><button class="primary" onclick="resolve('${r.id}')">Submit</button><button onclick="dismiss('${r.id}')">Dismiss</button></div>`;
+    $('airlock').appendChild(div);
+  }
+
+  // rooms
+  const byRoom = {};
+  for (const a of s.agents) (byRoom[a.room] = byRoom[a.room] || []).push(a);
+  $('rooms').innerHTML = '';
+  for (const room of s.rooms) {
+    const agents = (byRoom[room.key] || []).sort((a,b) => a.rank - b.rank);
+    const div = document.createElement('div'); div.className = 'room';
+    const open = s.tasks.filter(t => t.room === room.key && ['queued','in_progress','submitted','in_review'].includes(t.status)).length;
+    div.innerHTML = `<h3>${esc(room.name)} <span class="tag">${open} open</span></h3><p>${esc(room.purpose)}</p>` + agents.map(a => `
+      <div class="agent" title="valence ${a.emotion.valence.toFixed(2)} · arousal ${a.emotion.arousal.toFixed(2)} · confidence ${a.emotion.confidence.toFixed(2)} · stress ${a.emotion.stress.toFixed(2)} · effort ${a.behaviour.effort} · risk ${a.behaviour.risk_appetite}">
+        <div class="mood">${MOOD[a.mood] || '🙂'}</div>
+        <div style="flex:1">
+          <div><span class="name">${esc(a.name)}</span> <span class="role">${esc(a.role)}${a.rank===0?' · Director':(a.rank===1?' · Head':'')}${a.status!=='active'?' · '+a.status:''}</span></div>
+          <div class="small muted">${a.mood} · streak ${a.stats.streak>0?'+':''}${a.stats.streak} · perf ${a.stats.performance.toFixed(2)} · ${a.stats.approvals}✓ ${a.stats.revisions}↩ ${a.stats.rejections}✗ · ${usd(a.stats.revenue_attributed_cents)}</div>
+          <div class="bar"><i style="width:${Math.round((a.emotion.valence+1)/2*100)}%; background:${a.emotion.valence>=0?'var(--good)':'var(--bad)'}"></i></div>
+        </div>
+        <div class="pill-row"><button title="praise" onclick="signal('${a.id}','positive')">👍</button><button title="criticise" onclick="signal('${a.id}','negative')">👎</button></div>
+      </div>`).join('');
+    $('rooms').appendChild(div);
+  }
+
+  // ventures
+  $('ventures').innerHTML = s.ventures.length ? s.ventures.map(v => `<tr><td><b>${esc(v.name)}</b><br><span class="muted small">${esc(v.id)}</span></td><td><span class="tag ${v.stage==='killed'?'bad':(['earning','scaling'].includes(v.stage)?'good':'')}">${v.stage}</span></td><td>${esc(v.revenue_rail)}</td><td>${v.originality ? v.originality.score.toFixed(2) : '-'}</td><td>${usd(v.revenue_cents)}</td><td>${usd(v.cost_cents)}</td><td class="small">${esc(v.thesis).slice(0,220)}${v.kill_reason?'<br><span class="tag bad">'+esc(v.kill_reason).slice(0,120)+'</span>':''}<details><summary>milestones</summary>${v.milestones.map(m=>'<div class="small muted">'+esc(m)+'</div>').join('')}</details></td></tr>`).join('') : '<tr><td colspan="7" class="muted">No ventures yet. The Forge pitches once the Observatory has trends.</td></tr>';
+
+  // trends
+  $('trends').innerHTML = s.trends.length ? s.trends.map(t => `<tr><td><b>${esc(t.title)}</b><div class="small muted">${esc(t.summary).slice(0,200)}</div>${t.source_urls.length?'<div class="small">'+t.source_urls.slice(0,2).map(u=>`<a href="${esc(u)}" target="_blank" style="color:var(--accent)">${esc(u).slice(0,50)}</a>`).join(' · ')+'</div>':''}</td><td>${t.opportunity.toFixed(2)}</td><td>${t.freshness.toFixed(2)}</td><td>${t.crowding.toFixed(2)}</td><td><span class="tag">${t.status}</span></td></tr>`).join('') : '<tr><td colspan="5" class="muted">No trends yet.</td></tr>';
+
+  $('board').innerHTML = s.board.slice().reverse().map(p => `<div><span class="t">[${esc(p.key)}] t${p.tick} ${esc(agentName(p.pinned_by))}</span>${esc(p.content)}</div>`).join('') || '<div class="muted">Empty.</div>';
+  $('events').innerHTML = s.ticks.slice().reverse().map(t => `<div><span class="t">tick ${t.tick} · ${t.finished_at} · $${t.llm_cost_usd.toFixed(3)}</span>${t.events.map(e=>esc(e)).join('<br>')}</div>`).join('') || '<div class="muted">No ticks yet.</div>';
+  const feed = [];
+  for (const r of s.reviews.slice(-20)) feed.push({tick:r.tick, html:`<span class="tag ${r.verdict==='approve'?'good':(r.verdict==='reject'?'bad':'warn')}">${r.verdict}</span> ${esc(agentName(r.reviewer_id))} → ${esc(agentName(r.author_id))}${r.cross_room?' <span class="tag">cross-room</span>':''}: ${esc(r.feedback).slice(0,180)}`});
+  for (const g of s.signals.slice(-25)) feed.push({tick:g.tick, html:`<span class="tag ${g.kind==='positive'?'good':'bad'}">${g.kind==='positive'?'+':'-'}${g.magnitude.toFixed(2)}</span> ${esc(agentName(g.agent_id))} · ${esc(g.source)}: ${esc(g.reason).slice(0,140)}`});
+  feed.sort((a,b) => b.tick - a.tick);
+  $('reviews').innerHTML = feed.map(f => `<div><span class="t">t${f.tick}</span>${f.html}</div>`).join('') || '<div class="muted">Nothing yet.</div>';
+  $('ledger').innerHTML = s.ledger_entries.slice().reverse().map(e => `<div><span class="t">t${e.tick}</span><span class="tag ${e.kind==='revenue'?'good':''}">${e.kind}</span> ${usd(e.amount_cents)} ${esc(e.source)} ${esc(e.memo).slice(0,80)}</div>`).join('') || '<div class="muted">Empty.</div>';
+  $('rails').innerHTML = s.rails.map(r => `<div class="small"><span class="tag ${r.configured?'good':''}">${r.configured?'connected':'not connected'}</span> <b>${esc(r.name)}</b> · ${esc(r.description)}${!r.configured && r.name!=='manual' ? '<div class="muted">Setup once: '+esc(r.human_setup_once)+'</div>' : ''}</div>`).join('');
+  const op = s.operator;
+  $('operator').innerHTML = `<div class="small">Skills: ${esc(op.skills.join('; ')||'-')}<br>Audiences: ${esc(op.audiences.join('; ')||'-')}<br>Accounts: ${esc(op.accounts.join('; ')||'-')}<br>Location: ${esc(op.location_and_physical.join('; ')||'-')}<br>Assets: ${esc(op.proprietary_assets.join('; ')||'-')}<br>Hours/week: ${op.hours_per_week_available}</div>`;
+}
+
+function agentName(id) { if (!state) return id; const a = state.agents.find(a => a.id === id); return a ? a.name : (id || ''); }
+
+async function tick() { toast('Ticking…'); await api('/api/tick', 'POST'); await refresh(); toast('Tick done'); }
+async function toggleRun() { if (state.running) await api('/api/stop', 'POST'); else await api('/api/run', 'POST', { interval_seconds: Number($('interval').value) || 60 }); await refresh(); }
+async function resolve(id) {
+  const r = state.airlock.find(x => x.id === id); const response = {};
+  for (const f of r.fields) response[f.name] = $(`f_${id}_${f.name}`).value;
+  if (!r.fields.length) response.answer = $(`f_${id}_answer`).value;
+  await api(`/api/airlock/${id}/resolve`, 'POST', { response }); toast('Sent to the factory'); await refresh();
+}
+async function dismiss(id) { await api(`/api/airlock/${id}/dismiss`, 'POST', { response: { reason: 'dismissed on dashboard' } }); await refresh(); }
+async function sendNote() { const c = $('note').value.trim(); if (!c) return; await api('/api/message', 'POST', { content: c, to: 'all' }); $('note').value = ''; toast('Pinned'); await refresh(); }
+async function saveOperator() {
+  const body = {}; const map = { op_skills:'skills', op_audiences:'audiences', op_accounts:'accounts', op_location:'location_and_physical', op_assets:'proprietary_assets' };
+  for (const [id, k] of Object.entries(map)) { const v = $(id).value.trim(); if (v) body[k] = v; $(id).value=''; }
+  if ($('op_hours').value) body.hours_per_week_available = Number($('op_hours').value);
+  await api('/api/operator', 'POST', body); toast('Saved'); await refresh();
+}
+async function recordRevenue() { const a = Number($('rev_amount').value); if (!a) return; await api('/api/revenue', 'POST', { amount_usd: a, memo: $('rev_memo').value, venture_id: $('rev_venture').value || null }); $('rev_amount').value=''; toast('Recorded'); await refresh(); }
+async function signal(agentId, kind) { const reason = prompt(kind === 'positive' ? 'What did they do well?' : 'What went wrong?'); if (reason === null) return; await api('/api/signal', 'POST', { agent_id: agentId, kind, magnitude: 0.5, reason: reason || 'operator feedback' }); await refresh(); }
+
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>
