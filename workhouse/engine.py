@@ -146,6 +146,7 @@ class Context:
             self.company_state(),
             room_instructions,
             ("REVISION REQUESTED. Previous reviewer notes: " + " | ".join(task.revision_notes)) if task.revision_notes else "",
+            (f"THE OPERATOR ANSWERED THIS TASK'S ESCALATION: {'approved' if task.inputs['human_response'].get('approved') else 'declined'}. Note: {task.inputs['human_response'].get('note') or '(none)'}") if isinstance(task.inputs.get("human_response"), dict) else "",
         ]).strip()
 
     # -- helpers used by rooms -------------------------------------------------
@@ -254,6 +255,10 @@ class Engine:
                         conn.configure(resp)
                         ctx.log(f"airlock: connector {conn.name} configured")
                         ctx.bus.pin(f"rail:{conn.name}", f"{conn.name} is connected. {conn.automated_after}", tick=ctx.tick)
+                    # never keep a pasted secret in the request record once it has been applied
+                    for f in req.fields:
+                        if f.type == "secret" and f.name in req.response:
+                            req.response[f.name] = "***"
                 elif req.type == "raise_cap":
                     new_cap = float(resp.get("new_cap_usd") or 0)
                     if new_cap > self.settings.max_total_cost_usd:
@@ -271,8 +276,12 @@ class Engine:
                         ctx.log(f"airlock: manual revenue ${cents/100:.2f}")
                         self._revenue_signals(e.venture_id, cents)
                 elif req.type in ("approve_spend", "approve_publish", "decision", "legal_check", "create_account", "manual_action"):
-                    approved = str(resp.get("approved", resp.get("decision", "yes"))).strip().lower() in {"yes", "true", "1", "approve", "approved", "done"}
                     note = str(resp.get("note") or resp.get("answer") or "")
+                    explicit = resp.get("approved", resp.get("decision"))
+                    if explicit is not None:
+                        approved = str(explicit).strip().lower() in {"yes", "true", "1", "approve", "approved", "done"}
+                    else:  # free-text answer: a leading refusal counts as a decline
+                        approved = not note.strip().lower().startswith(("no", "reject", "decline", "don't", "do not", "stop", "cancel"))
                     if req.task_id:
                         task = self.store.tasks.get(req.task_id)
                         if task and task.status == TaskStatus.blocked:
@@ -506,7 +515,9 @@ class Engine:
             elif final.verdict == ReviewVerdict.escalate:
                 task.status = TaskStatus.blocked
                 self.store.tasks.put(task)
-                ctx.airlock.request("decision", f"Escalated: {task.title}", f"{final.feedback}\n\nWork summary: {work.summary}", fields=[], venture_id=task.venture_id, task_id=task.id, requested_by=final.reviewer_id, tick=ctx.tick, why_it_matters="A manager escalated this beyond what agents may decide alone.")
+                from .models import AirlockField
+
+                ctx.airlock.request("decision", f"Escalated: {task.title}", f"{final.feedback}\n\nWork summary: {work.summary}", fields=[AirlockField(name="approved", label="Let them proceed?", type="choice", choices=["yes", "no"]), AirlockField(name="note", label="Your guidance", type="textarea", required=False)], venture_id=task.venture_id, task_id=task.id, requested_by=final.reviewer_id, tick=ctx.tick, why_it_matters="The Director escalated this beyond what agents may decide alone.")
                 ctx.log(f"escalated to the Airlock: {task.title}")
             else:
                 task.status = TaskStatus.rejected
@@ -566,17 +577,15 @@ class Engine:
                 self.store.agents.put(a)
                 ctx.log(ev)
                 ctx.bus.broadcast("system", ev, tick=ctx.tick)
-                ctx.signal(a.id, SignalKind.positive if "promoted" in ev or "off probation" in ev else SignalKind.negative, 0.6, "standing", ev)
+                good = any(w in ev for w in ("promoted", "off probation", "back from mentoring"))
+                ctx.signal(a.id, SignalKind.positive if good else SignalKind.negative, 0.6 if good else 0.4, "standing", ev)
 
     def _charge_llm(self) -> None:
         ctx = self.ctx
         records = self.llm.usage.drain()
         if records:
-            by_venture: dict[str | None, float] = {}
-            for label, cost in records:
-                by_venture[None] = by_venture.get(None, 0.0) + cost
             carry = float(self.store.get_kv("llm_cost_carry_usd", 0.0) or 0.0)
-            total = by_venture[None] + carry
+            total = sum(cost for _, cost in records) + carry
             entry = ctx.ledger.llm_cost(total, memo=f"tick {ctx.tick}: {len(records)} calls", tick=ctx.tick)
             charged = (entry.amount_cents / 100) if entry else 0.0
             self.store.set_kv("llm_cost_carry_usd", round(total - charged, 6))
@@ -603,7 +612,7 @@ class Engine:
             "ventures": [v.model_dump() | {"profit_cents": v.profit_cents} for v in self.store.ventures.all()],
             "trends": [t.model_dump() | {"opportunity": t.opportunity} for t in ctx.top_trends(12)],
             "airlock": [r.model_dump() for r in ctx.airlock.open()],
-            "airlock_resolved": [r.model_dump() for r in self.store.airlock.where(lambda r: r.status.value != "open")][-20:],
+            "airlock_resolved": [_mask_secrets(r) for r in self.store.airlock.where(lambda r: r.status.value != "open")][-20:],
             "board": [p.model_dump() for p in ctx.bus.board()],
             "messages": [m.model_dump() for m in self.store.messages.all()[-40:]],
             "reviews": [r.model_dump() for r in self.store.reviews.all()[-40:]],
@@ -613,6 +622,13 @@ class Engine:
             "operator": ctx.operator.model_dump(),
             "rails": [{"name": c.name, "configured": c.configured(), "description": c.description, "human_setup_once": c.human_setup_once, "fields": [f.model_dump() for f in c.setup_fields]} for c in ctx.rails.connectors.values()],
         }
+
+
+def _mask_secrets(req) -> dict[str, Any]:
+    d = req.model_dump()
+    secret_names = {f.name for f in req.fields if f.type == "secret"}
+    d["response"] = {k: ("***" if k in secret_names and v else v) for k, v in d.get("response", {}).items()}
+    return d
 
 
 def ctx_workers_idle(engine: Engine, room: str) -> bool:

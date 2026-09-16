@@ -41,6 +41,9 @@ def test_airlock_roundtrip_configures_rail_and_revenue_signals(engine):
     air.resolve(req.id, {"secret_key": "sk_test_abc"}, tick=1)
     engine.run_tick()
     assert engine.ctx.rails.get("stripe").configured()
+    stored = engine.store.airlock.get(req.id)
+    assert stored.response["secret_key"] == "***", "pasted secrets must not stay in the request record"
+    assert "sk_test_abc" not in str(engine.snapshot())
     # manual revenue through the airlock
     v = engine.store.ventures.put(__import__("workhouse.models", fromlist=["Venture"]).Venture(name="V", thesis="t", stage=VentureStage.launched, owner_agent_id=engine.store.agents.all()[-1].id))
     r = air.request("enter_revenue", "Record", "d", venture_id=v.id, tick=2)
