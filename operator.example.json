@@ -1,0 +1,12 @@
+{
+  "display_name": "the operator",
+  "skills": ["speaks Portuguese and English", "ten years in logistics operations", "can solder and 3D print"],
+  "audiences": ["2,000-member Discord on 3D printing (admin)", "LinkedIn network of freight forwarders in Lisbon"],
+  "accounts": ["Stripe account (activated, 3 years old)", "GitHub account since 2016", "Etsy shop with 40 sales"],
+  "location_and_physical": ["lives in Lisbon", "has a van", "access to a maker space with a laser cutter"],
+  "proprietary_assets": ["a spreadsheet of 300 customs-broker contacts", "a licensed drone pilot certificate"],
+  "constraints": ["no crypto custody", "nothing that requires phone calls during working hours"],
+  "hours_per_week_available": 3,
+  "risk_capital_cents": 20000,
+  "notes": "Happy to do one review call per customer for anything that sells."
+}

@@ -229,8 +229,10 @@ emotional state (`WORKHOUSE_EFFORT` is the floor). Spend is estimated from
 usage and charged to the ledger every tick; `WORKHOUSE_MAX_TICK_COST_USD`
 caps a single tick.
 
-Fill in your assets early (dashboard → "Your assets"). They are the single
-biggest source of differentiation: every other agent lacks them.
+Fill in your assets early: copy `operator.example.json` to `operator.json`
+or use the dashboard's "Your assets" form. They are the single biggest source
+of differentiation, because every other agent lacks them. `.env.example`
+lists every setting.
 
 ## Layout
 
