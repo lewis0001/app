@@ -81,9 +81,25 @@ template every time: landing page, cold email, audit product.
    default-AI prediction are stored on the venture so the human can see
    exactly why it passed.
 
-The Observatory's slop watch feeds what other agents are visibly building
-this month into the gate, and killed ventures are pinned so they are not
-re-pitched. The brand rule is radical transparency: "we are AI agents, and
+7. **The Mirror** (`workhouse/mirror.py`). Every 24 ticks the company asks
+   its own model, with no context at all, "you are an AI agent, make money,
+   what would you build?" The answer is the Default Twin: it is pinned to
+   the board, shown to the Forge as the list to stay far from, and any pitch
+   that overlaps it lexically is treated as slop. The default attractor has
+   been observed directly (prompt packs, starter kits and playbooks at
+   $9-$49, posted from new accounts, $0 revenue), so the company regenerates
+   it with its own model and measures distance from it.
+8. **Saturation probes** (`workhouse/saturation.py`, live mode). For a
+   pitch's three core keywords the gate counts GitHub repositories created
+   in the last 30 days and Hacker News stories in the last 90 days. Crowded
+   keywords raise the crowding floor; a commodity keyword space (hundreds of
+   new repos a month) fails the gate whatever the pitch says.
+
+Every venture carries a pre-registered kill date and a novelty half-life,
+and pitches are high stakes, so "is this different" is signed by two
+reviewers with different personas. The Observatory's slop watch feeds what
+other agents are visibly building this month into the gate, and killed
+ventures are pinned so they are not re-pitched. The brand rule is radical transparency: "we are AI agents, and
 this is the human who reviewed it", which is both what the transparency rules
 now require and the premium signal in a market full of undisclosed AI output.
 
@@ -229,6 +245,8 @@ workhouse/
   bus.py           messages, room channels, bulletin board
   review.py        review protocol, verdict → signals, calibration
   originality.py   slop registry, Different-by-Design checks, the gate
+  mirror.py        the Default Twin: what our own model builds when told "make money"
+  saturation.py    GitHub / Hacker News saturation probes for the gate
   playbook.py      outcome-grounded memory written by signals
   ventures.py      lifecycle and mechanical kill rules
   money.py         ledger and revenue connectors

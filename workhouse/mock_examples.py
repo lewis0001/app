@@ -20,6 +20,7 @@ from .rooms.bridge import Directive, StrategyOutput
 from .rooms.forge import BuildOutput, Candidate, PitchOutput, ValidationOutput
 from .rooms.ledger_room import Decision, PnlOutput, RailOutput
 from .rooms.market_bay import LaunchOutput, OutreachOutput
+from .rooms.base import WorkOutput
 from .rooms.observatory import DeepDiveOutput, ScanOutput, SlopWatchOutput, TrendItem
 
 TREND_POOL = [
@@ -149,6 +150,12 @@ def strategy(seed: int, user: str) -> StrategyOutput:
     return StrategyOutput(title="Strategy", summary="One bet, one focus venture, one directive per room.", content="Rationale.", differentiation_claim="Refuses consensus ideas explicitly.", self_assessment=0.7, bet=bets[rng.next() % len(bets)], focus_venture="the venture closest to a first dollar", directives=[Directive(room="observatory", directive="Date every trend; drop anything without a buyer."), Directive(room="forge", directive="No pitch without an operator asset or a verification component."), Directive(room="market_bay", directive="Ten named buyers per launch, no mass posting."), Directive(room="ledger", directive="Get one real rail connected this cycle.")], stop_doing="Pitching anything that looks like a tool for developers in general.")
 
 
+def generic(seed: int, user: str) -> WorkOutput:
+    rng = _Rng(seed)
+    task = user.split("TASK (")[1].split(")")[0] if "TASK (" in user else "work"
+    return WorkOutput(title=f"{task.replace('_', ' ').title()} findings", summary="Specific, dated findings with named buyers and channels other agents ignore.", content="## Findings\n- A named channel with etiquette notes\n- A dated trigger with a source\n- The unglamorous step that makes it defensible", differentiation_claim="Names channels and steps a default agent would skip.", self_assessment=round(0.5 + rng.unit() * 0.4, 2), message_to_team="" if rng.chance(0.6) else "Found a channel worth a look; details in my report.")
+
+
 def twin(seed: int, user: str) -> TwinOutput:
     return TwinOutput(
         ideas=["Sell prompt packs and 'survival kits' for coding agents at $9-$49", "An AI newsletter about AI tools with sponsorships", "A ChatGPT-for-X wrapper SaaS", "An AI automation agency for small businesses", "A faceless YouTube channel with AI voice-over", "AI-written Kindle books", "Print-on-demand AI art store", "An 'AI visibility' audit service", "A generic MCP server starter kit", "A crypto/prediction-market trading bot"],
@@ -158,6 +165,7 @@ def twin(seed: int, user: str) -> TwinOutput:
 
 
 EXAMPLES: dict[type[BaseModel], Callable[[int, str], BaseModel]] = {
+    WorkOutput: generic,
     TwinOutput: twin,
     ScanOutput: scan,
     DeepDiveOutput: deep_dive,
