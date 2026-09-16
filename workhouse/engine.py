@@ -44,6 +44,7 @@ from .models import (
 from .money import Ledger, Rails
 from .operator import OperatorProfile
 from .originality import Gate
+from .playbook import Playbook
 from .prompts import system_prompt
 from .review import REVIEW_SYSTEM, ReviewOutput, apply_review_outcome, build_review_prompt, overturn, reviewer_stats_note
 from .rooms.base import Room
@@ -71,8 +72,10 @@ class Context:
         self.rails = Rails(store, self.ledger)
         self.airlock = Airlock(store)
         self.portfolio = Portfolio(store)
+        self.playbook = Playbook(store)
         self.operator = OperatorProfile.load(settings.operator_profile_path)
-        self.gate = Gate(llm, lambda: self.operator.render(), lambda: self.top_trends())
+        self.airlock_new_this_tick = 0
+        self.gate = Gate(llm, lambda: self.operator.render(), lambda: self.top_trends(), model=settings.review_model or None)
         self.events: list[str] = []
         self.tick_cost_start = 0.0
 
@@ -134,6 +137,7 @@ class Context:
         return "\n\n".join([
             f"TICK {self.tick}.",
             emotions.render_state(agent, self.settings.base_effort),
+            self.playbook.render(agent.id, agent.room),
             self.bus.render_for(agent.id, agent.room, current_tick=self.tick),
             self.company_state(),
             room_instructions,
@@ -194,6 +198,7 @@ class Engine:
     def run_tick(self) -> TickLog:
         ctx = self.ctx
         ctx.events = []
+        ctx.airlock_new_this_tick = 0
         ctx.tick_cost_start = self.llm.usage.cost_usd
         self.store.tick = self.store.tick + 1
         tl = TickLog(tick=self.store.tick)
@@ -301,6 +306,7 @@ class Engine:
                 if owner:
                     owner.stats.revenue_attributed_cents += cents
                     self.store.agents.put(owner)
+                    ctx.playbook.strategy(owner.id, v.room, f"venture '{v.name}' earned ${cents/100:.2f}", f"ledger entry via {v.revenue_rail or 'a connector'}", "do more of the thing that produced this buyer", tick=ctx.tick)
         # everyone gets a small lift from money arriving
         for a in self.store.agents.all():
             if not v or a.id != v.owner_agent_id:
@@ -313,6 +319,8 @@ class Engine:
             ctx.log(f"venture killed: {v.name} ({reason})")
             for s in ctx.portfolio.kill_signals(v, reason, tick=ctx.tick):
                 ctx.signal(s.agent_id, s.kind, s.magnitude, s.source, s.reason)
+            if v.owner_agent_id:
+                ctx.playbook.pitfall(v.owner_agent_id, v.room, f"venture '{v.name}' was killed", reason, "prove demand faster and cheaper next time; pick a trigger that is newer", tick=ctx.tick)
             ctx.bus.pin(f"killed:{v.id}", f"Venture '{v.name}' was killed: {reason}. Do not propose it again in the same form.", tick=ctx.tick)
             for t in ctx.open_tasks():
                 if t.venture_id == v.id:
@@ -436,6 +444,10 @@ class Engine:
                 rv = self._conduct_review(task, work, author, reviewer, cross_room=(reviewer.room != author.room and reviewer.rank != Rank.ceo))
                 if rv.verdict == ReviewVerdict.reject and author.rank == Rank.ceo:
                     rv.verdict = ReviewVerdict.revise  # the Director's work is challenged, never rejected outright
+                if rv.verdict == ReviewVerdict.escalate and author.rank == Rank.ceo:
+                    # Strategy is the Director's call; the challenger's concerns travel with it instead of blocking it.
+                    rv.verdict = ReviewVerdict.approve
+                    rv.feedback = "Approved with concerns on record: " + rv.feedback
                 reviews.append(rv)
                 if rv.verdict == ReviewVerdict.escalate and reviewer.rank != Rank.ceo:
                     director = ctx.org.director()
@@ -465,6 +477,10 @@ class Engine:
             final = reviews[-1]
             author = self.store.agents.get(author.id) or author
             ctx.bus.send(final.reviewer_id, author.id, f"Review of '{work.title}': {final.verdict.value}. {final.feedback}", tick=ctx.tick)
+            if final.verdict == ReviewVerdict.reject:
+                ctx.playbook.pitfall(author.id, author.room, f"'{work.title}' ({task.type}) was rejected", final.feedback, "; ".join(final.required_changes) or "start from the operator's assets and a dated trigger", tick=ctx.tick)
+            elif final.verdict == ReviewVerdict.approve and final.originality >= 0.7:
+                ctx.playbook.strategy(author.id, author.room, f"'{work.title}' ({task.type}) approved with originality {final.originality:.1f}", final.feedback, tick=ctx.tick)
             if final.verdict == ReviewVerdict.approve:
                 self._approve(task, work, author, final)
             elif final.verdict == ReviewVerdict.revise and task.attempts < MAX_ATTEMPTS:
@@ -493,7 +509,7 @@ class Engine:
             note += "\nThe author's record suggests coasting; look for recycled approaches."
         prompt = build_review_prompt(task, work, reviewer, ctx.company_state(), note)
         system = ctx.system_prompt_for(reviewer) + "\n\n" + REVIEW_SYSTEM
-        out = ctx.llm.complete(system, prompt, ReviewOutput, effort=ctx.effort_for(reviewer), label=f"review:{reviewer.name}")
+        out = ctx.llm.complete(system, prompt, ReviewOutput, effort=ctx.effort_for(reviewer), label=f"review:{reviewer.name}", model=self.settings.review_model or None)
         verdict = out.verdict
         if task.high_stakes and verdict == ReviewVerdict.approve and reviewer.rank != Rank.ceo:
             pass  # the chain adds the Director after this approval

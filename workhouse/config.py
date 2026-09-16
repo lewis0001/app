@@ -46,6 +46,8 @@ class Settings:
     # "live" uses the Anthropic API, "mock" runs fully offline.
     mode: str = "mock"
     model: str = "claude-opus-5"
+    # Optional: a different model for reviewers and the gate, so judges do not share the drafter's blind spots.
+    review_model: str = ""
     # Effort floor for every LLM call; emotions can raise it (see emotions.py).
     base_effort: str = "high"
     max_tokens: int = 16000
@@ -78,6 +80,7 @@ class Settings:
         return cls(
             mode=mode,
             model=os.environ.get("WORKHOUSE_MODEL", "claude-opus-5"),
+            review_model=os.environ.get("WORKHOUSE_REVIEW_MODEL", ""),
             base_effort=os.environ.get("WORKHOUSE_EFFORT", "high"),
             max_tokens=_env_int("WORKHOUSE_MAX_TOKENS", 16000),
             db_path=Path(os.environ.get("WORKHOUSE_DB", "workhouse.db")),

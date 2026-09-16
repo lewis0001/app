@@ -80,12 +80,13 @@ class LLM:
         web_search: bool = False,
         label: str = "agent",
         max_tokens: int | None = None,
+        model: str | None = None,
     ) -> T:
         if effort not in EFFORT_LEVELS:
             effort = "high"
-        return self._complete(system, user, schema, effort=effort, web_search=web_search, label=label, max_tokens=max_tokens)
+        return self._complete(system, user, schema, effort=effort, web_search=web_search, label=label, max_tokens=max_tokens, model=model)
 
-    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None) -> T:  # pragma: no cover - abstract
+    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None) -> T:  # pragma: no cover - abstract
         raise NotImplementedError
 
 
@@ -104,10 +105,11 @@ class AnthropicLLM(LLM):
         self._anthropic = anthropic
         self._client = anthropic.Anthropic()
 
-    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None) -> T:
+    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None) -> T:
         anthropic = self._anthropic
+        model = model or self.settings.model
         kwargs: dict[str, Any] = dict(
-            model=self.settings.model,
+            model=model,
             max_tokens=max_tokens or self.settings.max_tokens,
             # Stable prefix first so the cache hits across agents sharing a system prompt.
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
@@ -133,7 +135,7 @@ class AnthropicLLM(LLM):
         inp = int(getattr(usage, "input_tokens", 0) or 0)
         out = int(getattr(usage, "output_tokens", 0) or 0)
         cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-        cost = estimate_cost_usd(self.settings.model, inp, out, cache_read)
+        cost = estimate_cost_usd(model, inp, out, cache_read)
         self.usage.add(label, inp, out, cache_read, cost)
 
         if response.stop_reason == "refusal":
@@ -184,7 +186,7 @@ class MockLLM(LLM):
         self.examples: dict[type[BaseModel], Callable[[int, str], BaseModel]] = dict(examples or {})
         self.calls: list[dict[str, Any]] = []
 
-    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None) -> T:
+    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None) -> T:
         seed = int(hashlib.sha256((schema.__name__ + "\n" + user).encode()).hexdigest()[:12], 16)
         self.calls.append({"label": label, "schema": schema.__name__, "effort": effort, "web_search": web_search, "user": user[:400]})
         # Pretend each call costs a little so budget logic is exercised.

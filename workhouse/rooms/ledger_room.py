@@ -57,7 +57,7 @@ class LedgerRoom(Room):
             tasks.append(Task(room=self.key, type="pnl_review", title=f"P&L review (tick {ctx.tick})", brief="Review every active venture: revenue, cost, LLM spend, age, stage. Decide keep/kill/scale/freeze with numbers. Kills are recommendations to the Director.", created_by="system", priority=2, high_stakes=True))
         if not ctx.rails.configured():
             for v in active:
-                if v.stage in (VentureStage.building, VentureStage.launched) and not ctx.task_exists(f"Rail setup: {v.name}"):
+                if v.stage in (VentureStage.building, VentureStage.launched) and not ctx.task_exists(f"Rail setup: {v.name}") and not ctx.task_done(f"Rail setup: {v.name}"):
                     tasks.append(Task(room=self.key, type="rail_setup", title=f"Rail setup: {v.name}", brief=f"Venture {v.name} sells on '{v.revenue_rail}'. Pick the rail that fits and prepare the operator's one-time steps. Available connectors:\n{ctx.rails.render()}", created_by="system", priority=2, venture_id=v.id))
                     break
         if ctx.tick % 9 == 4 and ctx.store.ledger.count() > 0 and not any(t.type == "cost_audit" for t in ctx.open_tasks(self.key)):
@@ -106,8 +106,10 @@ class LedgerRoom(Room):
                 v.revenue_rail = rail
                 ctx.store.ventures.put(v)
             if conn and not conn.configured() and conn.name != "manual":
+                before = len(ctx.airlock.open())
                 ctx.airlock.request("connect_rail", f"Connect {conn.name}", f"{conn.human_setup_once}\n\nWhy this rail: {d.get('why', '')}\n\nAfter that: {conn.automated_after}", fields=conn.setup_fields, why_it_matters="Without a rail no venture can be paid.", venture_id=task.venture_id, requested_by=work.agent_id, tick=ctx.tick, dedupe_key=f"connect_rail:{conn.name}", meta={"rail": conn.name})
-                events.append(f"airlock: asked the operator to connect {conn.name}")
+                if len(ctx.airlock.open()) > before:
+                    events.append(f"airlock: asked the operator to connect {conn.name}")
         elif task.type == "cost_audit":
             ctx.bus.pin("cost_audit", work.summary[:400], pinned_by=work.agent_id, tick=ctx.tick)
         return events

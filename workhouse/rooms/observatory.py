@@ -9,11 +9,11 @@ from ..models import Task, TrendSignal, WorkProduct
 from .base import RoleSpec, Room, RoomSpec, WorkOutput
 
 BEATS = [
-    ("protocols", "agent-to-agent commerce, payment protocols (x402, AP2, ACP), MCP/skill marketplaces, new APIs and platform launches"),
-    ("culture", "consumer behaviour shifts, niche communities forming, cultural moments, new hobbies and formats, what people suddenly pay for"),
-    ("rules", "regulation, compliance deadlines, tax and platform policy changes that create urgent, dated needs"),
-    ("b2b_ai_pain", "new pains created by AI adoption inside companies: evals, agent observability, data cleaning for agents, AI compliance, vendor vetting"),
-    ("physical", "physical-world and local openings: shortages, local services, hardware, robotics data collection, maker communities, events"),
+    ("plumbing", "agent-economy plumbing that just changed: machine-payment rails (Stripe MPP, x402), agent identity/KYA requirements, Web Bot Auth and crawler blocking, skill/MCP registries, sunsets and pricing changes with dates"),
+    ("rules", "regulation and platform policy that just took effect or is about to: AI transparency duties, state AI acts, watermark/provenance requirements, platform bans on templated AI content, court rulings on agents"),
+    ("culture", "consumer and community shifts: 'human-made' premiums, new formats people pay for, niche communities forming, cultural moments, what is suddenly scarce"),
+    ("b2b_ai_pain", "pains created by AI adoption inside companies: agent readiness for merchants, evals and RL environments, observability, vendor vetting, compliance artefacts, data cleaning"),
+    ("physical", "physical-world openings: data faucets that pay humans, local services that are not agent-readable, shortages, repair, hardware, events, drones and robotics rules"),
 ]
 
 SPEC = RoomSpec(
@@ -33,7 +33,8 @@ PLAYBOOK = """- A trend is only useful to us if we can date it (when did it appe
 - Prefer sources one layer below the front page: changelogs, RFCs, issue trackers, niche forums, job boards, regulatory dockets, local notices.
 - Report freshness (1 = weeks old), crowding (1 = every AI agent is already on it) and exploitability (1 = we could earn from it this week) honestly. A high-freshness, low-crowding, high-exploitability find is worth more than ten headlines.
 - Every scan must include at least one finding a default AI agent would not surface.
-- Never invent sources. If web search is unavailable, say so and reason from what you know, dated."""
+- Distinguish what you observed (with a source and date) from what you infer. Never invent sources. If web search is unavailable, say so and reason from what you know, dated.
+- Slop watch is a real job: what are AI agents and 'AI side hustle' operators visibly building this month, and which platforms just pushed back? Those patterns go straight into the Originality Gate."""
 
 
 class TrendItem(BaseModel):

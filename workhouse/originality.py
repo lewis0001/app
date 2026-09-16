@@ -60,6 +60,20 @@ SLOP_REGISTRY: list[SlopPattern] = [
     SlopPattern("Generic 'AI for real estate/dentists/lawyers' vertical bot", "same chatbot with an industry noun in front", ("ai for dentists", "ai for real estate", "ai for lawyers", "ai receptionist", "ai for restaurants")),
     SlopPattern("Domain flipping / expired-domain SEO", "buy, redirect, sell", ("domain flipping", "expired domain", "domain investing")),
     SlopPattern("Recycled news summariser app", "aggregates headlines with AI summaries", ("news summarizer", "news summariser", "headline aggregator")),
+    SlopPattern("GEO / 'AI visibility' audits", "'how visible are you in AI search', AI-SEO agency, rebranded SEO shop", ("ai visibility", "geo audit", "generative engine optimization", "ai seo", "ai search visibility")),
+    SlopPattern("The $100-agent template", "first three actions are landing page, cold email, audit/report product", ("landing page and cold email", "cold email campaign", "audit report product", "free audit")),
+    SlopPattern("Vibe-coded app-store clone", "consumer app that replicates a top app with AI, App Store 4.3 spam", ("app store", "ios app", "mobile app clone", "vibe-coded app", "habit tracker app")),
+    SlopPattern("AI music uploads / stream farming", "AI tracks to Spotify/Deezer, playlist farming", ("ai music", "spotify uploads", "stream farming", "ai-generated songs", "playlist")),
+    SlopPattern("AI course / Skool / teacher-resource pack", "'how to use AI' course, community, TpT packs", ("skool", "teachers pay teachers", "ai course", "ai bootcamp", "how to use ai")),
+    SlopPattern("Autonomous social accounts / reply bots", "bot posting, reply farming, Reddit astroturfing for audience", ("reply bot", "auto-reply", "astroturf", "engagement farming", "grow an audience with", "x automation")),
+    SlopPattern("Agent token / DAO / 'AI-run fund'", "memecoin, tokenised agent, autonomous fund", ("token launch", "memecoin", "dao", "ai-run fund", "agent token", "tokenize")),
+    SlopPattern("Agent social network growth", "using Moltbook-style agent networks as a channel", ("moltbook", "agent social network", "agent-to-agent social")),
+    SlopPattern("Open-source bounty hunting", "claiming Algora/Gitcoin bounties with agents", ("algora", "bounty hunting", "open-source bounties", "gitcoin")),
+    SlopPattern("Freelance-marketplace automation", "submitting on Upwork/Fiverr without a human", ("upwork", "fiverr", "freelancer.com")),
+    SlopPattern("AI-generated podcast / audiobook", "NotebookLM-style shows, AI narrated books", ("ai podcast", "audiobook", "narrated by ai")),
+    SlopPattern("Prediction-market / crypto agent trading", "Polymarket bots, perps, arbitrage", ("polymarket", "prediction market", "perps", "hyperliquid")),
+    SlopPattern("'AI-run company' as the product", "the novelty story is the business", ("first ai-run company", "run entirely by ai", "autonomous company as a service")),
+    SlopPattern("AI UGC ads / virtual influencer / companion clone", "white-label companion, AI influencer ad generator", ("virtual influencer", "ugc ads", "ai ugc", "companion app")),
 ]
 
 
@@ -99,11 +113,14 @@ CHECKS: list[Check] = [
     Check("falsifiable", "Does it state what evidence would prove it wrong?", "Names a measurable kill condition."),
     Check("contrarian_evidence", "Does it rest on evidence the consensus is missing (data gathered, not vibes)?", "Cites something observed, with a source or a measurement."),
     Check("compounding", "Does each sale make the next easier (data, reputation, list, catalogue)?", "Names the compounding asset."),
+    Check("no_fresh_accounts", "Can it run without creating new platform accounts, passing KYC, or trusting unknown counterparties without escrow?", "Uses rails and accounts the operator already has or can set up once; unknown counterparties are verified or escrowed."),
+    Check("ground_truth_verifiable", "Can success be verified by evidence the agents cannot fabricate (payment records, ledger, third-party replies, logs)?", "Names the external evidence that will prove it worked."),
+    Check("not_default_probability", "Among the candidate ideas the author considered, is this one that a default agent was unlikely to pick?", "The author listed alternatives with default-probabilities and chose a low-probability tail."),
 ]
 
-MIN_CHECKS_PASSED = 9
+MIN_CHECKS_PASSED = 11
 MIN_SCORE = 0.6
-REQUIRED_CHECKS = {"not_default", "not_slop", "revenue_rail_named", "not_platform_hostile", "why_not_1000_agents"}
+REQUIRED_CHECKS = {"not_default", "not_slop", "revenue_rail_named", "not_platform_hostile", "why_not_1000_agents", "no_fresh_accounts", "ground_truth_verifiable"}
 
 
 class GateOutput(BaseModel):
@@ -120,6 +137,7 @@ class GateOutput(BaseModel):
 
 
 GATE_SYSTEM = """You are the Originality Gate of an autonomous AI company. Your only job is to stop the company from building what every other AI agent builds.
+Facts you work from: the 'agent makes money' genre has a documented template (landing page, cold email, audit product) and the honest runs made $0; platforms detect and ban templated AI output; thirty copies of one model pick the same ideas; the premium in the market is now for dated, verified, human-reviewed, specific work sold to a named buyer through a channel that cannot be spammed.
 Method: (1) Predict, concretely, what a generic AI agent would build from the same brief. (2) Compare the idea to that prediction and to the slop registry, including relabelled versions ('X but for dentists', 'Y with an agent'). (3) Judge every Different-by-Design check strictly against its pass criteria; an unmentioned item fails. (4) Estimate freshness of the trigger and crowding of the space.
 Be adversarial. Polished writing is not evidence. Big markets are not evidence. 'AI-powered' is not a differentiator. If in doubt, fail the check."""
 
@@ -187,15 +205,22 @@ def score(out: GateOutput, lexical_hits: list[str]) -> OriginalityReport:
 class Gate:
     """Runs the full gate. `llm` is any workhouse.llm.LLM."""
 
-    def __init__(self, llm, operator_summary_fn, trends_fn):
+    def __init__(self, llm, operator_summary_fn, trends_fn, model: str | None = None):
         self.llm = llm
+        self.model = model
         self.operator_summary_fn = operator_summary_fn
         self.trends_fn = trends_fn
 
-    def evaluate(self, title: str, text: str, *, label: str = "gate") -> OriginalityReport:
+    def evaluate(self, title: str, text: str, *, label: str = "gate", extra_patterns: list[str] | None = None, candidates_text: str = "") -> OriginalityReport:
+        # Lexical screen runs on the idea only; the candidate list names generic
+        # ideas on purpose and must not count against the chosen one.
         hits = slop_matches(title + " " + text)
         prompt = gate_prompt(title, text, self.operator_summary_fn(), self.trends_fn(), hits)
-        out = self.llm.complete(GATE_SYSTEM, prompt, GateOutput, effort="xhigh", label=label)
+        if extra_patterns:
+            prompt += "\n\nPATTERNS THE OBSERVATORY SAW OTHER AGENTS BUILDING THIS MONTH (also slop):\n" + "\n".join(f"- {p}" for p in extra_patterns[:12])
+        if candidates_text:
+            prompt += "\n\nCANDIDATES THE AUTHOR CONSIDERED (with the author's estimate of how likely a default agent would pitch each; judge the not_default_probability check from this):\n" + candidates_text
+        out = self.llm.complete(GATE_SYSTEM, prompt, GateOutput, effort="xhigh", label=label, model=self.model)
         return score(out, hits)
 
 

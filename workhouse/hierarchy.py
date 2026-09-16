@@ -4,6 +4,10 @@ Rank 0: the Director (CEO) on the Bridge.
 Rank 1: one Head per room, reporting to the Director.
 Rank 2: workers, reporting to their room's Head.
 
+Consequences are bounded and restorative (never existential): warning ->
+probation (reduced scope, every piece of work reviewed) -> paused with
+mentoring -> restored after a cooling-off period. Nobody is switched off.
+
 Review routing rules:
 * A worker's work is reviewed by its Head.
 * A Head's own work is reviewed by the Director.
@@ -93,7 +97,12 @@ class Org:
 
     @staticmethod
     def _can_review(agent: Agent) -> bool:
-        return agent.status == "active" and agent.stats.reviewer_error_rate < 0.5
+        # Frustrated reviewers become penalty-blind (Iowa Gambling Task studies on
+        # induced anger), so they sit reviews out while they cool down.
+        from .emotions import mood_label
+
+        calm = mood_label(agent.emotion) not in {"frustrated", "overwhelmed"}
+        return agent.status == "active" and agent.stats.reviewer_error_rate < 0.5 and calm
 
     # -- promotion / demotion ---------------------------------------------------
     def evaluate_standing(self, agent: Agent) -> str | None:
@@ -106,6 +115,12 @@ class Org:
         if agent.status == "active" and p <= PROBATION_PERFORMANCE and done >= 3:
             agent.status = "on_probation"
             return f"{agent.name} placed on probation (performance {p:.2f})."
+        if agent.status == "suspended":
+            # Paused with mentoring: restored automatically once the cooling-off period passes.
+            agent.stats.performance = max(agent.stats.performance, PROBATION_PERFORMANCE)
+            agent.status = "on_probation"
+            agent.recent_signals.append("restored after mentoring; start with small, verifiable work")
+            return f"{agent.name} is back from mentoring, on probation."
         if agent.status == "on_probation" and p <= DEMOTE_PERFORMANCE and done >= 5:
             if agent.rank == Rank.head:
                 agent.rank = Rank.worker
@@ -113,9 +128,9 @@ class Org:
                 if room and room.head_id == agent.id:
                     room.head_id = None
                     self.store.rooms.put(room)
-                return f"{agent.name} demoted from Head of {agent.room} to worker."
+                return f"{agent.name} steps down from Head of {agent.room} to worker (reduced scope)."
             agent.status = "suspended"
-            return f"{agent.name} suspended for sustained poor performance."
+            return f"{agent.name} paused for mentoring after sustained poor performance (restored next cycle)."
         if agent.rank == Rank.worker and agent.status == "active" and p >= PROMOTE_PERFORMANCE and done >= MIN_TASKS_FOR_PROMOTION:
             room = self.store.rooms.get(agent.room)
             if room and not room.head_id:

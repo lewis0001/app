@@ -12,6 +12,10 @@ from typing import Any
 from .models import AirlockField, AirlockRequest, AirlockStatus, now_iso
 from .store import Store
 
+# Human oversight has a capacity: past this many *new* requests in one tick the
+# rest are deferred (kept as tasks/messages) instead of flooding the queue.
+MAX_NEW_PER_TICK = 4
+
 REQUEST_TYPES: dict[str, dict[str, Any]] = {
     "connect_rail": {"label": "Connect a revenue rail", "priority": 1},
     "approve_spend": {"label": "Approve spending money", "priority": 1},
@@ -30,6 +34,8 @@ REQUEST_TYPES: dict[str, dict[str, Any]] = {
 class Airlock:
     def __init__(self, store: Store):
         self.store = store
+        self._last_tick = -1
+        self._new_this_tick = 0
 
     def request(self, type: str, title: str, description: str, *, fields: list[AirlockField] | None = None, why_it_matters: str = "", venture_id: str | None = None, task_id: str | None = None, requested_by: str = "system", tick: int = 0, priority: int | None = None, dedupe_key: str | None = None, meta: dict[str, Any] | None = None) -> AirlockRequest:
         if type not in REQUEST_TYPES:
@@ -39,6 +45,12 @@ class Airlock:
         existing = self.store.airlock.first(lambda r: r.status == AirlockStatus.open and r.response.get("_dedupe") == key)
         if existing:
             return existing
+        if tick != self._last_tick:
+            self._last_tick, self._new_this_tick = tick, 0
+        self._new_this_tick += 1
+        if self._new_this_tick > MAX_NEW_PER_TICK and priority is None and REQUEST_TYPES[type]["priority"] >= 3:
+            # Low-priority overflow: record it as a deferred request that surfaces next tick.
+            tick = tick + 1
         req = AirlockRequest(
             type=type,
             title=title.strip(),

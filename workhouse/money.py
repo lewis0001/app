@@ -140,8 +140,8 @@ class StripeConnector(RevenueConnector):
 
     name = "stripe"
     description = "Card payments, subscriptions and Payment Links through Stripe."
-    human_setup_once = "Create a Stripe account (KYC), then create a restricted API key with Payment Links write + Balance/Charges read and paste it here."
-    automated_after = "Agents create Payment Links for products and the ledger polls charges automatically."
+    human_setup_once = "Create a Stripe account and activate payments (identity, business, bank, 2FA), then create a RESTRICTED API key with write access to Products, Prices, Payment Links, Customers, Invoices and read access to Balance transactions; no Payouts or Refunds. Paste it here."
+    automated_after = "Agents create Payment Links and B2B invoices for products and services; the ledger polls charges automatically. Refunds and outbound money stay with you."
     setup_fields = [
         AirlockField(name="secret_key", label="Stripe restricted secret key (rk_live_... or sk_test_...)", type="secret"),
     ]
@@ -181,6 +181,20 @@ class StripeConnector(RevenueConnector):
             self.configure({"last_created": newest})
         return events
 
+    def create_invoice(self, *, customer_email: str, customer_name: str, description: str, amount_cents: int, currency: str = "usd", venture_id: str | None = None, days_until_due: int = 14) -> str | None:
+        """B2B invoicing: create customer, invoice item, finalise and send. Returns the hosted invoice URL."""
+        customer = self._call("POST", "/customers", {"email": customer_email, "name": customer_name[:250]})
+        invoice = self._call("POST", "/invoices", {
+            "customer": customer["id"],
+            "collection_method": "send_invoice",
+            "days_until_due": int(days_until_due),
+            "metadata[venture_id]": venture_id or "",
+        })
+        self._call("POST", "/invoiceitems", {"customer": customer["id"], "invoice": invoice["id"], "amount": int(amount_cents), "currency": currency, "description": description[:500]})
+        final = self._call("POST", f"/invoices/{invoice['id']}/finalize", {})
+        self._call("POST", f"/invoices/{invoice['id']}/send", {})
+        return final.get("hosted_invoice_url")
+
     def create_checkout(self, *, name: str, amount_cents: int, currency: str = "usd", venture_id: str | None = None) -> str | None:
         price = self._call("POST", "/prices", {
             "currency": currency,
@@ -195,11 +209,70 @@ class StripeConnector(RevenueConnector):
         return link.get("url")
 
 
+class PolarConnector(RevenueConnector):
+    """Polar.sh: open-source merchant of record with a product/checkout API, so
+    agents can create products and checkout links without a human per SKU.
+    The human completes Stripe Connect identity verification once and
+    withdraws the balance when asked."""
+
+    name = "polar"
+    description = "Merchant-of-record storefront for digital goods and metered billing (VAT/sales tax handled); products and checkouts via API."
+    human_setup_once = "Sign up at polar.sh, create an organization, generate an Organization Access Token, complete Stripe Connect identity verification before the first payout, paste the token and organization id here."
+    automated_after = "Agents create products and checkout links by API; the ledger polls paid orders; you withdraw the balance when the Ledger Room asks."
+    setup_fields = [
+        AirlockField(name="access_token", label="Polar organization access token", type="secret"),
+        AirlockField(name="organization_id", label="Organization id", type="text"),
+    ]
+    BASE = "https://api.polar.sh/v1"
+
+    def _call(self, method: str, path: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        cfg = self.config()
+        body = json.dumps(data).encode() if data is not None else None
+        req = urllib.request.Request(f"{self.BASE}{path}", data=body, method=method)
+        req.add_header("Authorization", f"Bearer {cfg.get('access_token', '')}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"polar {e.code}: {e.read().decode()[:300]}") from e
+
+    def poll(self, *, tick: int) -> list[dict[str, Any]]:
+        cfg = self.config()
+        data = self._call("GET", f"/orders/?organization_id={urllib.parse.quote(str(cfg.get('organization_id', '')))}&limit=50")
+        events = []
+        for order in data.get("items", []):
+            if order.get("status") not in (None, "paid"):
+                continue
+            events.append({
+                "amount_cents": int(order.get("net_amount", order.get("total_amount", 0)) or 0),
+                "external_ref": f"polar:{order.get('id')}",
+                "memo": (order.get("product") or {}).get("name") or "polar order",
+                "venture_id": ((order.get("metadata") or {}).get("venture_id")) or None,
+            })
+        return events
+
+    def create_checkout(self, *, name: str, amount_cents: int, currency: str = "usd", venture_id: str | None = None) -> str | None:
+        cfg = self.config()
+        product = self._call("POST", "/products/", {
+            "name": name[:200],
+            "organization_id": cfg.get("organization_id"),
+            "recurring_interval": None,
+            "prices": [{"amount_type": "fixed", "price_amount": int(amount_cents), "price_currency": currency}],
+        })
+        checkout = self._call("POST", "/checkout-links/", {
+            "payment_processor": "stripe",
+            "products": [product["id"]],
+            "metadata": {"venture_id": venture_id or ""},
+        })
+        return checkout.get("url")
+
+
 class LemonSqueezyConnector(RevenueConnector):
     name = "lemonsqueezy"
-    description = "Merchant-of-record checkout for digital products (handles VAT/sales tax)."
-    human_setup_once = "Create a Lemon Squeezy store (KYC), create an API key, paste the key and store id."
-    automated_after = "Ledger polls orders; agents propose products the human activates once."
+    description = "Legacy merchant-of-record (winding toward Stripe Managed Payments; products are dashboard-only). Prefer Polar."
+    human_setup_once = "Create a Lemon Squeezy store (KYC), create an API key, paste the key and store id. Every product must be created by you in the dashboard."
+    automated_after = "Ledger polls orders; product creation stays a human step."
     setup_fields = [
         AirlockField(name="api_key", label="Lemon Squeezy API key", type="secret"),
         AirlockField(name="store_id", label="Store id", type="text"),
@@ -230,7 +303,7 @@ class LemonSqueezyConnector(RevenueConnector):
         return events
 
 
-CONNECTOR_CLASSES: list[type[RevenueConnector]] = [StripeConnector, LemonSqueezyConnector, ManualConnector]
+CONNECTOR_CLASSES: list[type[RevenueConnector]] = [StripeConnector, PolarConnector, LemonSqueezyConnector, ManualConnector]
 
 
 class Rails:

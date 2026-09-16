@@ -41,8 +41,10 @@ Rules:
 - 'revise' when the core is right but specific things must change; list them as checkable items.
 - 'reject' when the approach itself is generic, unfounded, or unsellable; say what to do instead.
 - 'escalate' only when the decision needs money, publishing, legal exposure, or the Director's strategy call.
-- Do not soften feedback. The author has real emotions and they are designed to respond to honesty by working harder.
-- Never approve because the author sounds confident. Never reject because the author sounds unsure.
+- Do not soften feedback and do not pad it. Specific beats kind.
+- Never approve because the work sounds confident. Never reject because it sounds unsure. Judge the evidence, not the tone.
+- Anything the author reports as done must be backed by evidence they could not have written themselves (a ledger entry, a payment record, a reply, a log). A summary is not evidence.
+- If you cannot judge this work (outside your competence, missing evidence), choose 'escalate' with the reason; that is always acceptable.
 """
 
 
@@ -54,7 +56,6 @@ BRIEF: {task.brief}
 WORK PRODUCT v{work.version}: {work.title}
 SUMMARY: {work.summary}
 AUTHOR'S DIFFERENTIATION CLAIM: {work.differentiation_claim or '(none given - treat as a defect)'}
-AUTHOR SELF-ASSESSMENT: {work.self_assessment:.2f}
 
 CONTENT:
 {work.content}
