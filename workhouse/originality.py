@@ -116,11 +116,15 @@ CHECKS: list[Check] = [
     Check("no_fresh_accounts", "Can it run without creating new platform accounts, passing KYC, or trusting unknown counterparties without escrow?", "Uses rails and accounts the operator already has or can set up once; unknown counterparties are verified or escrowed."),
     Check("ground_truth_verifiable", "Can success be verified by evidence the agents cannot fabricate (payment records, ledger, third-party replies, logs)?", "Names the external evidence that will prove it worked."),
     Check("not_default_probability", "Among the candidate ideas the author considered, is this one that a default agent was unlikely to pick?", "The author listed alternatives with default-probabilities and chose a low-probability tail."),
+    Check("outcome_priced", "Is the price anchored to an outcome (per verified fact, per accepted filing, per resolved case, per month of monitoring) and clear of the $9-$49 info-product band, at least ten times the marginal AI cost?", "Names the unit, the price and the outcome it is anchored to."),
+    Check("first_channel_standing", "Is the first channel one where the operator already has standing (an account older than 90 days, a warm intro, their own audience) rather than a new account on Reddit, HN or X?", "Names the channel and the standing; new-account posting as the first channel fails."),
+    Check("non_llm_oracle", "Is there at least one correctness check that is not an LLM's opinion (a regulation text, a test suite, a measurement, a market price, a form acceptance, a payment)?", "Names the non-LLM oracle."),
+    Check("far_from_twin", "Is it far from everything the Default Twin (our own model told simply to make money) listed?", "No twin idea or product type would be confused with it."),
 ]
 
-MIN_CHECKS_PASSED = 11
+MIN_CHECKS_PASSED = 14
 MIN_SCORE = 0.6
-REQUIRED_CHECKS = {"not_default", "not_slop", "revenue_rail_named", "not_platform_hostile", "why_not_1000_agents", "no_fresh_accounts", "ground_truth_verifiable"}
+REQUIRED_CHECKS = {"not_default", "not_slop", "revenue_rail_named", "not_platform_hostile", "why_not_1000_agents", "no_fresh_accounts", "ground_truth_verifiable", "far_from_twin", "outcome_priced"}
 
 
 class GateOutput(BaseModel):
@@ -164,13 +168,17 @@ DIFFERENT-BY-DESIGN CHECKS (keys are exact):
 Return the gate output with a boolean for every check key."""
 
 
-def score(out: GateOutput, lexical_hits: list[str]) -> OriginalityReport:
+def score(out: GateOutput, lexical_hits: list[str], crowding_floor: float | None = None) -> OriginalityReport:
     results = {c.key: bool(out.check_results.get(c.key, False)) for c in CHECKS}
     passed_n = sum(results.values())
     required_ok = all(results.get(k, False) for k in REQUIRED_CHECKS)
     slop = sorted(set(lexical_hits) | set(out.slop_relabels))
     base = passed_n / len(CHECKS)
-    s = 0.55 * base + 0.25 * out.freshness + 0.20 * (1.0 - out.crowding)
+    crowding = max(out.crowding, crowding_floor or 0.0)
+    if crowding_floor is not None and crowding_floor >= 0.85:
+        results["not_default"] = False  # a commodity keyword space fails regardless of the pitch's wording
+        required_ok = False
+    s = 0.55 * base + 0.25 * out.freshness + 0.20 * (1.0 - crowding)
     if slop:
         s -= 0.15 * len(slop)
     s = round(max(0.0, min(1.0, s)), 3)
@@ -197,7 +205,7 @@ def score(out: GateOutput, lexical_hits: list[str]) -> OriginalityReport:
         slop_matches=slop,
         check_results=results,
         freshness=out.freshness,
-        crowding=out.crowding,
+        crowding=crowding,
         verdict_reason=reason,
     )
 
@@ -205,23 +213,33 @@ def score(out: GateOutput, lexical_hits: list[str]) -> OriginalityReport:
 class Gate:
     """Runs the full gate. `llm` is any workhouse.llm.LLM."""
 
-    def __init__(self, llm, operator_summary_fn, trends_fn, model: str | None = None):
+    def __init__(self, llm, operator_summary_fn, trends_fn, model: str | None = None, mirror=None, saturation=None):
         self.llm = llm
         self.model = model
+        self.mirror = mirror
+        self.saturation = saturation
         self.operator_summary_fn = operator_summary_fn
         self.trends_fn = trends_fn
 
-    def evaluate(self, title: str, text: str, *, label: str = "gate", extra_patterns: list[str] | None = None, candidates_text: str = "") -> OriginalityReport:
+    def evaluate(self, title: str, text: str, *, label: str = "gate", extra_patterns: list[str] | None = None, candidates_text: str = "", keywords: list[str] | None = None) -> OriginalityReport:
         # Lexical screen runs on the idea only; the candidate list names generic
         # ideas on purpose and must not count against the chosen one.
         hits = slop_matches(title + " " + text)
+        if self.mirror is not None:
+            hits += self.mirror.matches(title + " " + text)
         prompt = gate_prompt(title, text, self.operator_summary_fn(), self.trends_fn(), hits)
+        crowding_floor = None
+        if self.mirror is not None:
+            prompt += "\n\n" + self.mirror.render()
+        if self.saturation is not None and keywords:
+            summary, crowding_floor = self.saturation.verdict(self.saturation.measure(keywords))
+            prompt += "\n\nSATURATION PROBES (numbers, not vibes): " + summary
         if extra_patterns:
             prompt += "\n\nPATTERNS THE OBSERVATORY SAW OTHER AGENTS BUILDING THIS MONTH (also slop):\n" + "\n".join(f"- {p}" for p in extra_patterns[:12])
         if candidates_text:
             prompt += "\n\nCANDIDATES THE AUTHOR CONSIDERED (with the author's estimate of how likely a default agent would pitch each; judge the not_default_probability check from this):\n" + candidates_text
         out = self.llm.complete(GATE_SYSTEM, prompt, GateOutput, effort="xhigh", label=label, model=self.model)
-        return score(out, hits)
+        return score(out, hits, crowding_floor)
 
 
 def render_checks() -> str:

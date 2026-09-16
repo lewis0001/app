@@ -58,7 +58,9 @@ class Portfolio:
         for v in self.active():
             age = tick - v.tick_created
             reason = ""
-            if v.stage in (VentureStage.gated, VentureStage.validating, VentureStage.building) and age > LAUNCH_DEADLINE_TICKS:
+            if v.kill_by_tick and tick > v.kill_by_tick and v.stage not in (VentureStage.earning, VentureStage.scaling):
+                reason = f"pre-registered kill date (tick {v.kill_by_tick}) passed without revenue"
+            elif v.stage in (VentureStage.gated, VentureStage.validating, VentureStage.building) and age > LAUNCH_DEADLINE_TICKS:
                 reason = f"not launched within {LAUNCH_DEADLINE_TICKS} ticks"
             elif v.stage == VentureStage.launched and v.revenue_cents == 0 and (tick - v.tick_updated) > REVENUE_DEADLINE_TICKS:
                 reason = f"no revenue within {REVENUE_DEADLINE_TICKS} ticks of launch"

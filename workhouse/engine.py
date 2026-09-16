@@ -41,10 +41,12 @@ from .models import (
     VentureStage,
     WorkProduct,
 )
+from .mirror import Mirror
 from .money import Ledger, Rails
 from .operator import OperatorProfile
 from .originality import Gate
 from .playbook import Playbook
+from .saturation import Saturation
 from .prompts import system_prompt
 from .review import REVIEW_SYSTEM, ReviewOutput, apply_review_outcome, build_review_prompt, overturn, reviewer_stats_note
 from .rooms.base import Room
@@ -73,9 +75,11 @@ class Context:
         self.airlock = Airlock(store)
         self.portfolio = Portfolio(store)
         self.playbook = Playbook(store)
+        self.mirror = Mirror(store)
+        self.saturation = Saturation(store, enabled=(settings.mode == "live" and settings.saturation_probes))
         self.operator = OperatorProfile.load(settings.operator_profile_path)
         self.airlock_new_this_tick = 0
-        self.gate = Gate(llm, lambda: self.operator.render(), lambda: self.top_trends(), model=settings.review_model or None)
+        self.gate = Gate(llm, lambda: self.operator.render(), lambda: self.top_trends(), model=settings.review_model or None, mirror=self.mirror, saturation=self.saturation)
         self.events: list[str] = []
         self.tick_cost_start = 0.0
 
@@ -211,6 +215,7 @@ class Engine:
             if self.paused_reason:
                 ctx.log(f"paused: {self.paused_reason}")
             else:
+                self._mirror()
                 self._plan()
                 self._work()
                 self._review()
@@ -326,6 +331,16 @@ class Engine:
                 if t.venture_id == v.id:
                     t.status = TaskStatus.cancelled
                     self.store.tasks.put(t)
+
+    def _mirror(self) -> None:
+        ctx = self.ctx
+        if ctx.mirror.stale(ctx.tick) and ctx.budget_ok():
+            try:
+                data = ctx.mirror.refresh(self.llm, tick=ctx.tick, model=self.settings.review_model or None)
+                ctx.bus.pin("default_twin", "What our own model builds when told 'make money' (stay far from it): " + "; ".join(data["ideas"][:6]), tick=ctx.tick)
+                ctx.log("mirror: Default Twin refreshed")
+            except Exception as e:
+                ctx.log(f"mirror failed: {e}")
 
     def _decay(self) -> None:
         for a in self.store.agents.all():

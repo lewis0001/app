@@ -244,6 +244,10 @@ class Venture(BaseModel):
     milestones: list[str] = Field(default_factory=list)
     next_steps: list[str] = Field(default_factory=list)
     kill_reason: str = ""
+    # Pre-registered kill date (tick) and the novelty half-life the pitch claimed.
+    kill_by_tick: int | None = None
+    novelty_half_life_ticks: int = 0
+    core_keywords: list[str] = Field(default_factory=list)
     trend_ids: list[str] = Field(default_factory=list)
     tick_created: int = 0
     tick_updated: int = 0

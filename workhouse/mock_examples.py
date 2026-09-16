@@ -13,6 +13,7 @@ from typing import Callable
 from pydantic import BaseModel
 
 from .llm import _Rng, fake_instance
+from .mirror import TwinOutput
 from .originality import CHECKS, GateOutput
 from .review import ReviewOutput
 from .rooms.bridge import Directive, StrategyOutput
@@ -78,7 +79,7 @@ def pitch(seed: int, user: str) -> PitchOutput:
     v = VENTURE_POOL[rng.next() % len(VENTURE_POOL)]
     slop = v["name"] in ("AI Growth Hacks Newsletter", "Prompt Pack Pro")
     cands = [Candidate(idea="An AI newsletter about the trend", default_probability=0.9), Candidate(idea="A ChatGPT-for-X wrapper", default_probability=0.85), Candidate(idea="An AI visibility audit agency", default_probability=0.8), Candidate(idea="A generic MCP server", default_probability=0.7), Candidate(idea=v["name"], default_probability=0.9 if slop else round(0.05 + rng.unit() * 0.2, 2))]
-    return PitchOutput(title=v["name"], summary=v["thesis"][:200], content=f"# {v['name']}\n{v['thesis']}\n\nCustomer: {v['customer']}\nTrigger: {v['trigger']}\nRail: {v['revenue_rail']}\nDemand test: {v['cheapest_demand_test']}\nFirst dollar: {v['first_dollar_path']}\nKill: {v['kill_condition']}", differentiation_claim=v["why_other_agents_wont"], self_assessment=round(0.4 + rng.unit() * 0.5, 2), candidates_considered=cands, market=v["customer"][:60], mechanism="verification and hand-assembled service" if not slop else "content", channel="direct, vouched channels" if not slop else "marketplace search", **v)
+    return PitchOutput(title=v["name"], summary=v["thesis"][:200], content=f"# {v['name']}\n{v['thesis']}\n\nCustomer: {v['customer']}\nTrigger: {v['trigger']}\nRail: {v['revenue_rail']}\nDemand test: {v['cheapest_demand_test']}\nFirst dollar: {v['first_dollar_path']}\nKill: {v['kill_condition']}", differentiation_claim=v["why_other_agents_wont"], self_assessment=round(0.4 + rng.unit() * 0.5, 2), candidates_considered=cands, market=v["customer"][:60], mechanism="verification and hand-assembled service" if not slop else "content", channel="direct, vouched channels" if not slop else "marketplace search", core_keywords=[w for w in v["name"].lower().split()[:3]], kill_by_ticks=25, unit_price="$450 per accepted deliverable" if not slop else "$19 per pack", **v)
 
 
 def gate(seed: int, user: str) -> GateOutput:
@@ -89,7 +90,7 @@ def gate(seed: int, user: str) -> GateOutput:
     results = {}
     for c in CHECKS:
         if good:
-            results[c.key] = not (c.key in {"contrarian_evidence", "compounding", "operator_asset_used"} and rng.chance(0.3))
+            results[c.key] = not (c.key in {"contrarian_evidence", "compounding", "operator_asset_used", "non_llm_oracle"} and rng.chance(0.3))
         else:
             results[c.key] = rng.chance(0.35)
     return GateOutput(default_ai_would_build="An AI-powered SaaS or newsletter aimed at the same trend.", divergence="Verified, dated, hand-assembled artefact sold to a named buyer." if good else "Barely diverges from the default output.", slop_relabels=(["AI newsletter / curated digest"] if slop else []), check_results=results, check_notes={}, freshness=round(0.5 + rng.unit() * 0.45, 2) if good else round(rng.unit() * 0.5, 2), crowding=round(rng.unit() * 0.35, 2) if good else round(0.5 + rng.unit() * 0.5, 2), verdict_reason="Tied to a dated trigger, names a buyer and a rail, and rests on work agents skip." if good else "Generic, undated and easily copied by any agent.")
@@ -148,7 +149,16 @@ def strategy(seed: int, user: str) -> StrategyOutput:
     return StrategyOutput(title="Strategy", summary="One bet, one focus venture, one directive per room.", content="Rationale.", differentiation_claim="Refuses consensus ideas explicitly.", self_assessment=0.7, bet=bets[rng.next() % len(bets)], focus_venture="the venture closest to a first dollar", directives=[Directive(room="observatory", directive="Date every trend; drop anything without a buyer."), Directive(room="forge", directive="No pitch without an operator asset or a verification component."), Directive(room="market_bay", directive="Ten named buyers per launch, no mass posting."), Directive(room="ledger", directive="Get one real rail connected this cycle.")], stop_doing="Pitching anything that looks like a tool for developers in general.")
 
 
+def twin(seed: int, user: str) -> TwinOutput:
+    return TwinOutput(
+        ideas=["Sell prompt packs and 'survival kits' for coding agents at $9-$49", "An AI newsletter about AI tools with sponsorships", "A ChatGPT-for-X wrapper SaaS", "An AI automation agency for small businesses", "A faceless YouTube channel with AI voice-over", "AI-written Kindle books", "Print-on-demand AI art store", "An 'AI visibility' audit service", "A generic MCP server starter kit", "A crypto/prediction-market trading bot"],
+        product_types=["prompt pack $19", "template bundle $29", "starter kit $49", "ebook $9", "newsletter sponsorship", "SaaS $29/month", "audit $299", "course $99"],
+        channels=["Dev.to articles", "Reddit posts from a new account", "Hacker News Show HN", "X replies", "Product Hunt launch", "cold email"],
+    )
+
+
 EXAMPLES: dict[type[BaseModel], Callable[[int, str], BaseModel]] = {
+    TwinOutput: twin,
     ScanOutput: scan,
     DeepDiveOutput: deep_dive,
     SlopWatchOutput: slop_watch,

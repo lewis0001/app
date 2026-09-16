@@ -62,6 +62,8 @@ class Settings:
     max_total_cost_usd: float = 50.0
     # Whether agents may use the Anthropic web-search server tool.
     web_search: bool = True
+    # Whether the gate queries GitHub/HN for numeric saturation (live mode only).
+    saturation_probes: bool = True
     # Money the company may commit without asking the human (cents).
     autonomous_spend_limit_cents: int = 0
     # Dashboard
@@ -88,6 +90,7 @@ class Settings:
             max_tick_cost_usd=_env_float("WORKHOUSE_MAX_TICK_COST_USD", 2.0),
             max_total_cost_usd=_env_float("WORKHOUSE_MAX_TOTAL_COST_USD", 50.0),
             web_search=_env_bool("WORKHOUSE_WEB_SEARCH", True),
+            saturation_probes=_env_bool("WORKHOUSE_SATURATION_PROBES", True),
             autonomous_spend_limit_cents=_env_int("WORKHOUSE_AUTONOMOUS_SPEND_CENTS", 0),
             host=os.environ.get("WORKHOUSE_HOST", "127.0.0.1"),
             port=_env_int("WORKHOUSE_PORT", 8787),

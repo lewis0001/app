@@ -47,8 +47,11 @@ class PitchOutput(WorkOutput):
     operator_asset_used: str = Field(default="", description="Which operator asset this relies on, if any.")
     revenue_rail: str = Field(description="stripe | lemonsqueezy | manual | other (name it).")
     cheapest_demand_test: str = Field(description="Under $20, produces a number, what number kills it.")
-    first_dollar_path: str = Field(description="Who is contacted where with what message.")
+    first_dollar_path: str = Field(description="Who is contacted where with what message; the first channel must be one where the operator already has standing.")
     kill_condition: str
+    core_keywords: list[str] = Field(description="Three keywords a competitor's repo or launch would use; the gate measures saturation with them.")
+    kill_by_ticks: int = Field(default=30, ge=5, le=60, description="Pre-registered kill date: ticks from now by which there must be revenue.")
+    unit_price: str = Field(description="Unit and price anchored to an outcome, e.g. '$0.05 per verified fact', '$450 per accepted filing'.")
 
 
 class ValidationOutput(WorkOutput):
@@ -78,7 +81,7 @@ class Forge(Room):
         tasks: list[Task] = []
         pf = ctx.portfolio
         if pf.has_capacity() and not any(t.type == "venture_pitch" for t in ctx.open_tasks(self.key)):
-            tasks.append(Task(room=self.key, type="venture_pitch", title=f"Venture pitch (tick {ctx.tick})", brief="Pitch one venture that passes the Originality Gate. Use the top trends, the deep dives on the board and the operator's assets.", created_by="system", priority=3))
+            tasks.append(Task(room=self.key, type="venture_pitch", title=f"Venture pitch (tick {ctx.tick})", brief="Pitch one venture that passes the Originality Gate. Use the top trends, the deep dives on the board and the operator's assets.", created_by="system", priority=3, high_stakes=True))
         for v in pf.by_stage(VentureStage.gated):
             if not ctx.task_exists(f"Validate demand: {v.name}"):
                 tasks.append(Task(room=self.key, type="validate_demand", title=f"Validate demand: {v.name}", brief=f"Venture: {v.name}\nThesis: {v.thesis}\nRun the cheapest demand test: {v.next_steps[0] if v.next_steps else 'design it'}. Report a number and a verdict.", created_by="system", priority=2, venture_id=v.id, assigned_to=v.owner_agent_id))
@@ -107,6 +110,8 @@ class Forge(Room):
             extra_slop = ctx.store.get_kv("slop_extra", []) or []
             if extra_slop:
                 extra += "\n\nSEEN OTHER AGENTS BUILDING THIS MONTH (avoid): " + "; ".join(extra_slop[:10])
+            extra += "\n\n" + ctx.mirror.render()
+            extra += "\n\nAGENTS ARE A CUSTOMER SEGMENT TOO: last month roughly 94,000 wallets paid other agents per call and only 22,000 sold to them. Scarce, verified, per-call resources sold to agents through a machine-payment rail pass the gate more easily than AI-made goods sold to humans."
         return f"TASK ({task.type}): {task.title}\n{task.brief}{extra}"
 
     def on_approved(self, ctx, task: Task, work: WorkProduct) -> list[str]:
@@ -126,12 +131,14 @@ class Forge(Room):
                 if isinstance(c, dict) and str(c.get("idea", "")).strip().lower()[:40] == name.lower()[:40]:
                     chosen_p = float(c.get("default_probability") or 0)
             cand_text = "\n".join(f"- {c.get('idea')} (default probability {c.get('default_probability')})" for c in cands if isinstance(c, dict))
-            report = ctx.gate.evaluate(name, text + "\n\n" + work.content, label=f"gate:{work.agent_id}", extra_patterns=ctx.store.get_kv("slop_extra", []) or [], candidates_text=cand_text)
+            keywords = [str(k) for k in (d.get("core_keywords") or [])][:3]
+            report = ctx.gate.evaluate(name, text + "\n\n" + work.content, label=f"gate:{work.agent_id}", extra_patterns=ctx.store.get_kv("slop_extra", []) or [], candidates_text=cand_text, keywords=keywords)
             if chosen_p is not None and chosen_p > 0.5:
                 report.passed = False
                 report.verdict_reason = f"FAILED: the chosen idea had default probability {chosen_p:.2f}; choose from the low-probability tail. " + report.verdict_reason
             if report.passed and ctx.portfolio.has_capacity():
-                v = Venture(name=name[:120], thesis=str(d.get("thesis") or work.summary), why_other_agents_wont=str(d.get("why_other_agents_wont") or ""), stage=VentureStage.gated, owner_agent_id=work.agent_id, room=self.key, revenue_rail=str(d.get("revenue_rail") or "manual").lower(), originality=report, next_steps=[str(d.get("cheapest_demand_test") or ""), str(d.get("first_dollar_path") or "")], tick_created=ctx.tick, tick_updated=ctx.tick)
+                kill_by = ctx.tick + int(d.get("kill_by_ticks") or 30)
+                v = Venture(name=name[:120], kill_by_tick=kill_by, novelty_half_life_ticks=int(d.get("kill_by_ticks") or 30), core_keywords=keywords, thesis=str(d.get("thesis") or work.summary), why_other_agents_wont=str(d.get("why_other_agents_wont") or ""), stage=VentureStage.gated, owner_agent_id=work.agent_id, room=self.key, revenue_rail=str(d.get("revenue_rail") or "manual").lower(), originality=report, next_steps=[str(d.get("cheapest_demand_test") or ""), str(d.get("first_dollar_path") or "")], tick_created=ctx.tick, tick_updated=ctx.tick)
                 v.milestones.append(f"t{ctx.tick}: passed the Originality Gate ({report.score:.2f})")
                 ctx.store.ventures.put(v)
                 archive = list(ctx.store.get_kv("niche_archive", []) or [])
