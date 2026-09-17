@@ -73,8 +73,13 @@ class Room:
         schema = self.output_schema(task)
         system = ctx.system_prompt_for(agent)
         user = ctx.user_prompt_for(agent, task, self.task_prompt(ctx, agent, task))
-        out = ctx.llm.complete(system, user, schema, effort=ctx.effort_for(agent), web_search=self.wants_web_search(task), label=f"{self.key}:{agent.name}:{task.type}")
+        out = ctx.llm.complete(system, user, schema, effort=ctx.effort_for(agent), web_search=self.wants_web_search(task), label=f"{self.key}:{agent.name}:{task.type}", venture_id=task.venture_id)
         return self.to_work_product(ctx, agent, task, out)
+
+    def precheck(self, task: Task, work: WorkProduct) -> list[str]:
+        """Code-only evidence requirements checked before any LLM review.
+        Return the list of missing items (empty = may be reviewed)."""
+        return []
 
     def wants_web_search(self, task: Task) -> bool:
         return False

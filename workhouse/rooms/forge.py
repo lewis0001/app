@@ -3,6 +3,8 @@ demand cheaply, then build the sellable thing.
 """
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
 
 from ..models import SignalKind, Task, Venture, VentureStage, WorkProduct
@@ -24,7 +26,8 @@ PLAYBOOK = """- One venture per pitch. Name the customer, the dated trigger, the
 - The Originality Gate will predict what a default AI agent would pitch and compare. Write that prediction yourself first and pitch something else.
 - Prefer ventures that use an operator asset, involve unglamorous work, or depend on timing. If none of those apply, you are probably pitching slop.
 - Demand tests cost under $20 and produce a number from at least ten real contacts. Building starts only after evidence you could not have written yourself: an inbound request, a paid deposit, a signed pilot, replies with links, or the operator confirming it. 'prepared_only' never advances a venture.
-- Pitching is verbalised sampling: list five to eight candidates with the probability a default agent would pitch each, then choose from the low-probability tail. The niche archive shows which (market x mechanism x channel) cells are already filled; fill an empty one.
+- Pitching is verbalised sampling: first write the ten things a default agent would do with this brief; you may not do any of them. Then list five to eight candidates with the probability a default agent would pitch each, and choose from the low-probability tail. The niche archive shows which (market x mechanism x channel) cells are already filled; fill an empty one.
+- Examples are not answers: anything you have seen listed as a good example (in research, on the board, in this playbook) is by now a default too. A copy of an example is itself a default.
 - Build the smallest thing someone will pay for this week, priced, with the exact rail. Anything that needs an account, money or publishing goes to the Airlock via needs_human."""
 
 
@@ -45,12 +48,12 @@ class PitchOutput(WorkOutput):
     default_agent_would_pitch: str = Field(description="What a generic AI agent would pitch from the same trends.")
     why_other_agents_wont: str = Field(description="Why 1000 other agents cannot do this next week.")
     operator_asset_used: str = Field(default="", description="Which operator asset this relies on, if any.")
-    revenue_rail: str = Field(description="stripe | lemonsqueezy | manual | other (name it).")
+    revenue_rail: str = Field(description="stripe | polar | manual (lemonsqueezy is legacy; 'other' only with a name).")
     cheapest_demand_test: str = Field(description="Under $20, produces a number, what number kills it.")
     first_dollar_path: str = Field(description="Who is contacted where with what message; the first channel must be one where the operator already has standing.")
     kill_condition: str
     core_keywords: list[str] = Field(description="Three keywords a competitor's repo or launch would use; the gate measures saturation with them.")
-    kill_by_ticks: int = Field(default=30, ge=5, le=60, description="Pre-registered kill date: ticks from now by which there must be revenue.")
+    kill_by_days: int = Field(default=21, ge=3, le=60, description="Pre-registered kill date: days from now by which there must be revenue.")
     unit_price: str = Field(description="Unit and price anchored to an outcome, e.g. '$0.05 per verified fact', '$450 per accepted filing'.")
 
 
@@ -80,7 +83,7 @@ class Forge(Room):
     def plan(self, ctx) -> list[Task]:
         tasks: list[Task] = []
         pf = ctx.portfolio
-        if pf.has_capacity() and not any(t.type == "venture_pitch" for t in ctx.open_tasks(self.key)):
+        if pf.has_capacity() and ctx.every(1) and not any(t.type == "venture_pitch" for t in ctx.open_tasks(self.key)):
             tasks.append(Task(room=self.key, type="venture_pitch", title=f"Venture pitch (tick {ctx.tick})", brief="Pitch one venture that passes the Originality Gate. Use the top trends, the deep dives on the board and the operator's assets.", created_by="system", priority=3, high_stakes=True))
         for v in pf.by_stage(VentureStage.gated):
             if not ctx.task_exists(f"Validate demand: {v.name}"):
@@ -132,13 +135,14 @@ class Forge(Room):
                     chosen_p = float(c.get("default_probability") or 0)
             cand_text = "\n".join(f"- {c.get('idea')} (default probability {c.get('default_probability')})" for c in cands if isinstance(c, dict))
             keywords = [str(k) for k in (d.get("core_keywords") or [])][:3]
-            report = ctx.gate.evaluate(name, text + "\n\n" + work.content, label=f"gate:{work.agent_id}", extra_patterns=ctx.store.get_kv("slop_extra", []) or [], candidates_text=cand_text, keywords=keywords)
+            lexical = " ".join(str(d.get(k) or "") for k in ("name", "thesis", "customer", "trigger", "market", "mechanism", "channel", "unit_price", "revenue_rail", "first_dollar_path"))
+            report = ctx.gate.evaluate(name, text + "\n\n" + work.content, label=f"gate:{work.agent_id}", extra_patterns=ctx.store.get_kv("slop_extra", []) or [], candidates_text=cand_text, keywords=keywords, lexical_text=name + " " + lexical)
             if chosen_p is not None and chosen_p > 0.5:
                 report.passed = False
                 report.verdict_reason = f"FAILED: the chosen idea had default probability {chosen_p:.2f}; choose from the low-probability tail. " + report.verdict_reason
             if report.passed and ctx.portfolio.has_capacity():
-                kill_by = ctx.tick + int(d.get("kill_by_ticks") or 30)
-                v = Venture(name=name[:120], kill_by_tick=kill_by, novelty_half_life_ticks=int(d.get("kill_by_ticks") or 30), core_keywords=keywords, thesis=str(d.get("thesis") or work.summary), why_other_agents_wont=str(d.get("why_other_agents_wont") or ""), stage=VentureStage.gated, owner_agent_id=work.agent_id, room=self.key, revenue_rail=str(d.get("revenue_rail") or "manual").lower(), originality=report, next_steps=[str(d.get("cheapest_demand_test") or ""), str(d.get("first_dollar_path") or "")], tick_created=ctx.tick, tick_updated=ctx.tick)
+                kill_by = ctx.tick + ctx.days_to_ticks(int(d.get("kill_by_days") or 21))
+                v = Venture(name=name[:120], kill_by_tick=kill_by, novelty_half_life_ticks=ctx.days_to_ticks(int(d.get("kill_by_days") or 21)), core_keywords=keywords, thesis=str(d.get("thesis") or work.summary), why_other_agents_wont=str(d.get("why_other_agents_wont") or ""), stage=VentureStage.gated, owner_agent_id=work.agent_id, room=self.key, revenue_rail=str(d.get("revenue_rail") or "manual").lower(), originality=report, next_steps=[str(d.get("cheapest_demand_test") or ""), str(d.get("first_dollar_path") or "")], tick_created=ctx.tick, tick_updated=ctx.tick)
                 v.milestones.append(f"t{ctx.tick}: passed the Originality Gate ({report.score:.2f})")
                 ctx.store.ventures.put(v)
                 archive = list(ctx.store.get_kv("niche_archive", []) or [])
@@ -190,6 +194,35 @@ class Forge(Room):
                 ctx.queue(Task(room="market_bay", type="launch_plan", title=f"Launch plan: {v.name}", brief=f"Venture: {v.name}\nThesis: {v.thesis}\nDeliverable: {str(d.get('deliverable') or '')[:1500]}\nPrice: ${int(d.get('price_cents') or 0)/100:.2f} on {v.revenue_rail}.\nPlan the launch: channels other agents ignore, first ten buyers, exact messages, what the human must approve.", created_by=work.agent_id, priority=2, venture_id=v.id, high_stakes=True, inputs={"price_cents": int(d.get("price_cents") or 0)}))
                 events.append(f"built: {v.name}; launch plan queued")
         return events
+
+    def precheck(self, task: Task, work: WorkProduct) -> list[str]:
+        d = work.data
+        missing: list[str] = []
+        if task.type == "venture_pitch":
+            if len(d.get("candidates_considered") or []) < 5:
+                missing.append("fewer than five candidates considered")
+            if len([k for k in (d.get("core_keywords") or []) if str(k).strip()]) < 2:
+                missing.append("core keywords missing")
+            if not re.search(r"20\d\d", str(d.get("trigger") or "")):
+                missing.append("the trigger is not dated")
+            if not str(d.get("unit_price") or "").strip():
+                missing.append("no unit price anchored to an outcome")
+            if not str(d.get("first_dollar_path") or "").strip():
+                missing.append("no first-dollar path")
+        elif task.type == "validate_demand":
+            verdict = str(d.get("verdict") or "").lower()
+            kind = str(d.get("evidence_kind") or "").lower()
+            if verdict.startswith("proceed"):
+                if kind not in {"inbound_request", "paid_deposit", "signed_pilot", "replies_with_links", "operator_confirmed"}:
+                    missing.append(f"'proceed' needs external evidence, not '{kind or 'none'}'")
+                if int(d.get("sample_size") or 0) < 10:
+                    missing.append("fewer than ten real contacts")
+        elif task.type == "build_asset":
+            if int(d.get("price_cents") or 0) <= 0:
+                missing.append("no price")
+            if len(str(d.get("deliverable") or "")) < 40:
+                missing.append("deliverable is empty")
+        return missing
 
     def on_rejected(self, ctx, task: Task, work: WorkProduct) -> list[str]:
         if task.type == "validate_demand" and task.venture_id:

@@ -24,7 +24,7 @@ def test_mirror_overlap_and_matches(tmp_path):
     m = Mirror(st)
     assert m.stale(0) and m.render().startswith("DEFAULT TWIN: not yet")
     st.set_kv("default_twin", {"tick": 1, "ideas": ["Sell prompt packs and starter kits for coding agents"], "product_types": ["prompt pack $19"], "channels": ["Reddit"]})
-    assert not m.stale(5) and m.stale(1 + 24)
+    assert not m.stale(5, ticks_per_day=24) and m.stale(1 + 24, ticks_per_day=24) and m.stale(2)
     assert overlap("prompt packs for coding agents", "Sell prompt packs and starter kits for coding agents") > 0.4
     assert m.matches("A curated prompt pack for coding agents sold as starter kits")
     assert not m.matches("Hand-verified dialect test sets for voice vendors entering Portugal")

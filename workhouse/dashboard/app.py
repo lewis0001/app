@@ -114,7 +114,8 @@ def create_app(engine: Engine) -> FastAPI:
     @app.post("/api/airlock/{request_id}/resolve")
     def resolve(request_id: str, body: ResolveBody) -> dict[str, Any]:
         try:
-            req = engine.ctx.airlock.resolve(request_id, body.response, tick=engine.store.tick)
+            with runner.lock:
+                req = engine.ctx.airlock.resolve(request_id, body.response, tick=engine.store.tick)
         except ValueError as e:
             raise HTTPException(400, str(e))
         if not req:
@@ -123,7 +124,8 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.post("/api/airlock/{request_id}/dismiss")
     def dismiss(request_id: str, body: ResolveBody) -> dict[str, Any]:
-        req = engine.ctx.airlock.dismiss(request_id, reason=str(body.response.get("reason", "")), tick=engine.store.tick)
+        with runner.lock:
+            req = engine.ctx.airlock.dismiss(request_id, reason=str(body.response.get("reason", "")), tick=engine.store.tick)
         if not req:
             raise HTTPException(404, "no such request")
         return req.model_dump()
@@ -133,28 +135,32 @@ def create_app(engine: Engine) -> FastAPI:
         cents = int(round(body.amount_usd * 100))
         if cents <= 0:
             raise HTTPException(400, "amount must be positive")
-        entry = engine.ctx.ledger.revenue(cents, venture_id=body.venture_id, source="manual", memo=body.memo or "manual entry", tick=engine.store.tick)
-        engine._revenue_signals(body.venture_id, cents)
+        with runner.lock:
+            entry = engine.ctx.ledger.revenue(cents, venture_id=body.venture_id, source="manual", memo=body.memo or "manual entry", tick=engine.store.tick)
+            engine._revenue_signals(body.venture_id, cents)
         return entry.model_dump()
 
     @app.post("/api/operator")
     def operator(body: dict[str, Any]) -> dict[str, Any]:
-        engine.ctx.operator.merge(body)
-        engine.ctx.operator.save(engine.settings.operator_profile_path)
+        with runner.lock:
+            engine.ctx.operator.merge(body)
+            engine.ctx.operator.save(engine.settings.operator_profile_path)
         return engine.ctx.operator.model_dump()
 
     @app.post("/api/message")
     def message(body: MessageBody) -> dict[str, Any]:
-        msg = engine.ctx.bus.send("human", body.to, body.content, channel="human", tick=engine.store.tick)
-        if body.to == "all":
-            engine.ctx.bus.pin("operator_note", body.content[:400], pinned_by="human", tick=engine.store.tick)
+        with runner.lock:
+            msg = engine.ctx.bus.send("human", body.to, body.content, channel="human", tick=engine.store.tick)
+            if body.to == "all":
+                engine.ctx.bus.pin("operator_note", body.content[:400], pinned_by="human", tick=engine.store.tick)
         return msg.model_dump()
 
     @app.post("/api/signal")
     def signal(body: dict[str, Any]) -> dict[str, Any]:
         """The human can praise or criticise an agent directly."""
         kind = SignalKind.positive if str(body.get("kind", "positive")) == "positive" else SignalKind.negative
-        sig = engine.ctx.signal(str(body.get("agent_id")), kind, float(body.get("magnitude", 0.5)), "human", str(body.get("reason", "operator feedback")))
+        with runner.lock:
+            sig = engine.ctx.signal(str(body.get("agent_id")), kind, float(body.get("magnitude", 0.5)), "human", str(body.get("reason", "operator feedback")))
         if not sig:
             raise HTTPException(404, "no such agent")
         return sig.model_dump()

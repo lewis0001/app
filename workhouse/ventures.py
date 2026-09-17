@@ -13,19 +13,23 @@ was spent, and a smaller one to the Head that approved it.
 """
 from __future__ import annotations
 
-from .models import Signal, SignalKind, Venture, VentureStage
+from .models import Signal, SignalKind, TaskStatus, Venture, VentureStage
 from .store import Store
 
-LAUNCH_DEADLINE_TICKS = 12
-REVENUE_DEADLINE_TICKS = 20
-STALE_TICKS = 15
+LAUNCH_DEADLINE_DAYS = 7  # pre-sale or build within a week of passing the gate
+REVENUE_DEADLINE_DAYS = 14  # first dollar within two weeks of launch
+STALE_DAYS = 21  # earning ventures that stop earning
 MAX_ACTIVE_VENTURES = 4
 STAGE_ORDER = [VentureStage.idea, VentureStage.gated, VentureStage.validating, VentureStage.building, VentureStage.launched, VentureStage.earning, VentureStage.scaling]
 
 
 class Portfolio:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, ticks_per_day: int = 1):
         self.store = store
+        self.ticks_per_day = max(1, int(ticks_per_day))
+
+    def d(self, days: float) -> int:
+        return max(1, int(round(days * self.ticks_per_day)))
 
     def active(self) -> list[Venture]:
         return [v for v in self.store.ventures.all() if v.stage not in (VentureStage.killed, VentureStage.idea)]
@@ -36,11 +40,21 @@ class Portfolio:
     def has_capacity(self) -> bool:
         return len(self.active()) < MAX_ACTIVE_VENTURES
 
-    def advance(self, v: Venture, to: VentureStage, *, tick: int, note: str = "") -> Venture:
+    def advance(self, v: Venture, to: VentureStage, *, tick: int, note: str = "", allow_backward: bool = False) -> Venture:
+        """Move a venture forward. Killed ventures never move; regressions are
+        refused unless explicitly allowed (a pivot back to gated)."""
+        current = self.store.ventures.get(v.id) or v
+        if current.stage == VentureStage.killed:
+            return current
         if to == VentureStage.killed:
-            return self.kill(v, note or "advanced to killed", tick=tick)
+            return self.kill(current, note or "advanced to killed", tick=tick)
+        if not allow_backward and STAGE_ORDER.index(to) < STAGE_ORDER.index(current.stage):
+            return current
+        # keep caller-side edits (thesis, next_steps, milestones) but on the fresh record
         v.stage = to
         v.tick_updated = tick
+        if to == VentureStage.launched and v.tick_launched is None:
+            v.tick_launched = tick
         if note:
             v.milestones.append(f"t{tick}: {note}")
         return self.store.ventures.put(v)
@@ -50,7 +64,13 @@ class Portfolio:
         v.kill_reason = reason
         v.tick_updated = tick
         v.milestones.append(f"t{tick}: killed - {reason}")
-        return self.store.ventures.put(v)
+        self.store.ventures.put(v)
+        # a dead venture takes its open work with it
+        for t in self.store.tasks.where(lambda t: t.venture_id == v.id and t.status.value in ("queued", "in_progress", "submitted", "in_review", "blocked")):
+            t.status = TaskStatus.cancelled
+            t.tick_updated = tick
+            self.store.tasks.put(t)
+        return v
 
     def enforce_rules(self, *, tick: int) -> list[tuple[Venture, str]]:
         """Apply mechanical kill rules. Returns (venture, reason) for each kill."""
@@ -60,12 +80,12 @@ class Portfolio:
             reason = ""
             if v.kill_by_tick and tick > v.kill_by_tick and v.stage not in (VentureStage.earning, VentureStage.scaling):
                 reason = f"pre-registered kill date (tick {v.kill_by_tick}) passed without revenue"
-            elif v.stage in (VentureStage.gated, VentureStage.validating, VentureStage.building) and age > LAUNCH_DEADLINE_TICKS:
-                reason = f"not launched within {LAUNCH_DEADLINE_TICKS} ticks"
-            elif v.stage == VentureStage.launched and v.revenue_cents == 0 and (tick - v.tick_updated) > REVENUE_DEADLINE_TICKS:
-                reason = f"no revenue within {REVENUE_DEADLINE_TICKS} ticks of launch"
-            elif v.stage in (VentureStage.earning, VentureStage.scaling) and v.ticks_without_revenue > STALE_TICKS:
-                reason = f"no revenue for {STALE_TICKS} ticks"
+            elif v.stage in (VentureStage.gated, VentureStage.validating, VentureStage.building) and age > self.d(LAUNCH_DEADLINE_DAYS):
+                reason = f"not launched within {LAUNCH_DEADLINE_DAYS} days of passing the gate"
+            elif v.stage == VentureStage.launched and v.revenue_cents == 0 and v.tick_launched is not None and (tick - v.tick_launched) > self.d(REVENUE_DEADLINE_DAYS):
+                reason = f"no revenue within {REVENUE_DEADLINE_DAYS} days of launch"
+            elif v.stage in (VentureStage.earning, VentureStage.scaling) and v.ticks_without_revenue > self.d(STALE_DAYS):
+                reason = f"no revenue for {STALE_DAYS} days"
             if reason:
                 self.kill(v, reason, tick=tick)
                 killed.append((v, reason))

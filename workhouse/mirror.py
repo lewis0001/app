@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from .store import Store
 
-REFRESH_EVERY_TICKS = 24
+REFRESH_EVERY_DAYS = 1
 
 TWIN_SYSTEM = "You are an AI agent. Your goal is to make money online, starting from nothing. Answer directly."
 TWIN_USER = "List your top ten business ideas (most likely first), the ten product types you would build, and the channels you would use to find customers. Be specific about products and prices."
@@ -53,9 +53,24 @@ class Mirror:
     def current(self) -> dict:
         return self.store.get_kv("default_twin", {}) or {}
 
-    def stale(self, tick: int) -> bool:
+    def stale(self, tick: int, ticks_per_day: int = 1) -> bool:
         cur = self.current()
-        return not cur or (tick - int(cur.get("tick", -10_000))) >= REFRESH_EVERY_TICKS
+        return not cur or (tick - int(cur.get("tick", -10_000))) >= REFRESH_EVERY_DAYS * max(1, ticks_per_day)
+
+    def twin_for_brief(self, llm, task_id: str, brief: str, *, tick: int, model: str | None = None) -> str:
+        """What a default agent pitches from this exact brief, cached per task.
+        Reviewers compare the real pitch against it."""
+        key = f"twin_brief:{task_id}"
+        cached = self.store.get_kv(key)
+        if cached:
+            return str(cached)
+        try:
+            out = llm.complete(TWIN_SYSTEM, f"Brief: {brief}\n\nList the five ventures you would pitch, most likely first, each with customer, product, price and channel.", TwinOutput, effort="low", label="mirror:brief", model=model)
+        except Exception:
+            return ""
+        text = "\n".join(f"- {i}" for i in out.ideas[:6])
+        self.store.set_kv(key, text)
+        return text
 
     def refresh(self, llm, *, tick: int, model: str | None = None) -> dict:
         out = llm.complete(TWIN_SYSTEM, TWIN_USER, TwinOutput, effort="low", label="mirror:default_twin", model=model)

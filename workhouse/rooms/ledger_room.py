@@ -38,7 +38,7 @@ class PnlOutput(WorkOutput):
 
 
 class RailOutput(WorkOutput):
-    rail: str = Field(description="stripe | lemonsqueezy | manual")
+    rail: str = Field(description="stripe | polar | manual (lemonsqueezy is legacy)")
     why: str
     human_steps: list[str] = Field(default_factory=list)
 
@@ -53,14 +53,14 @@ class LedgerRoom(Room):
     def plan(self, ctx) -> list[Task]:
         tasks: list[Task] = []
         active = ctx.portfolio.active()
-        if active and ctx.tick % 5 == 2 and not any(t.type == "pnl_review" for t in ctx.open_tasks(self.key)):
+        if active and ctx.every(2, offset=1) and not any(t.type == "pnl_review" for t in ctx.open_tasks(self.key)):
             tasks.append(Task(room=self.key, type="pnl_review", title=f"P&L review (tick {ctx.tick})", brief="Review every active venture: revenue, cost, LLM spend, age, stage. Decide keep/kill/scale/freeze with numbers. Kills are recommendations to the Director.", created_by="system", priority=2, high_stakes=True))
         if not ctx.rails.configured():
             for v in active:
                 if v.stage in (VentureStage.building, VentureStage.launched) and not ctx.task_exists(f"Rail setup: {v.name}") and not ctx.task_done(f"Rail setup: {v.name}"):
                     tasks.append(Task(room=self.key, type="rail_setup", title=f"Rail setup: {v.name}", brief=f"Venture {v.name} sells on '{v.revenue_rail}'. Pick the rail that fits and prepare the operator's one-time steps. Available connectors:\n{ctx.rails.render()}", created_by="system", priority=2, venture_id=v.id))
                     break
-        if ctx.tick % 9 == 4 and ctx.store.ledger.count() > 0 and not any(t.type == "cost_audit" for t in ctx.open_tasks(self.key)):
+        if ctx.every(7, offset=4) and ctx.store.ledger.count() > 0 and not any(t.type == "cost_audit" for t in ctx.open_tasks(self.key)):
             tasks.append(Task(room=self.key, type="cost_audit", title=f"Cost audit (tick {ctx.tick})", brief="Where is LLM spend going by room and venture? Which work produced nothing sellable? Recommend cuts.", created_by="system", priority=6))
         return tasks
 
@@ -93,7 +93,7 @@ class LedgerRoom(Room):
                     events.append(f"venture scaling: {v.name}")
                 if dec.budget_cents and dec.budget_cents != v.budget_cents:
                     if dec.budget_cents > ctx.settings.autonomous_spend_limit_cents:
-                        ctx.airlock.request("approve_spend", f"Budget ${dec.budget_cents/100:.2f} for {v.name}", dec.reason, fields=[AirlockField(name="approved", label="Approve?", type="choice", choices=["yes", "no"]), AirlockField(name="note", label="Note", type="textarea", required=False)], venture_id=v.id, requested_by=work.agent_id, tick=ctx.tick, why_it_matters="Money leaves the company only with your approval.")
+                        ctx.airlock.request("approve_spend", f"Budget ${dec.budget_cents/100:.2f} for {v.name}", dec.reason, fields=[AirlockField(name="approved", label="Approve?", type="choice", choices=["yes", "no"]), AirlockField(name="note", label="Note", type="textarea", required=False)], venture_id=v.id, requested_by=work.agent_id, tick=ctx.tick, why_it_matters="Money leaves the company only with your approval.", meta={"budget_cents": dec.budget_cents}, money_impact_cents=dec.budget_cents)
                     else:
                         v.budget_cents = dec.budget_cents
                         ctx.store.ventures.put(v)

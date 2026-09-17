@@ -247,6 +247,7 @@ class Venture(BaseModel):
     # Pre-registered kill date (tick) and the novelty half-life the pitch claimed.
     kill_by_tick: int | None = None
     novelty_half_life_ticks: int = 0
+    tick_launched: int | None = None
     core_keywords: list[str] = Field(default_factory=list)
     trend_ids: list[str] = Field(default_factory=list)
     tick_created: int = 0
@@ -334,6 +335,9 @@ class AirlockRequest(BaseModel):
     task_id: str | None = None
     requested_by: str = ""
     priority: int = 5
+    # What the agents will do if the human never answers; silence is a decision.
+    if_ignored: str = ""
+    money_impact_cents: int = 0
     tick: int = 0
     resolved_tick: int | None = None
     created_at: str = Field(default_factory=now_iso)

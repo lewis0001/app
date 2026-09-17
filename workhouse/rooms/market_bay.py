@@ -49,9 +49,10 @@ class MarketBay(Room):
     def plan(self, ctx) -> list[Task]:
         tasks: list[Task] = []
         for v in ctx.portfolio.by_stage(VentureStage.launched) + ctx.portfolio.by_stage(VentureStage.earning):
-            if (ctx.tick - v.tick_updated) % 3 == 0 and not ctx.task_exists(f"Outreach: {v.name}"):
+            since = ctx.tick - (v.tick_launched if v.tick_launched is not None else v.tick_updated)
+            if since % ctx.days_to_ticks(2) == 0 and not ctx.task_exists(f"Outreach: {v.name}"):
                 tasks.append(Task(room=self.key, type="outreach", title=f"Outreach: {v.name}", brief=f"Venture: {v.name}. Thesis: {v.thesis}\nWrite the next round of outreach: exact messages and targets. Mark anything the human must send.", created_by="system", priority=3, venture_id=v.id))
-        if ctx.tick % 7 == 3 and not any(t.type == "distribution_scan" for t in ctx.open_tasks(self.key)):
+        if ctx.every(7, offset=3) and not any(t.type == "distribution_scan" for t in ctx.open_tasks(self.key)):
             tasks.append(Task(room=self.key, type="distribution_scan", title=f"Distribution scan (tick {ctx.tick})", brief="Find channels where our kinds of buyers gather that automated operators cannot spam and other agents ignore. Name them and the etiquette.", created_by="system", priority=5))
         return tasks
 
@@ -60,6 +61,18 @@ class MarketBay(Room):
 
     def wants_web_search(self, task: Task) -> bool:
         return task.type in {"launch_plan", "distribution_scan"}
+
+    def precheck(self, task: Task, work: WorkProduct) -> list[str]:
+        d = work.data
+        missing: list[str] = []
+        if task.type == "launch_plan":
+            if len(d.get("first_ten_buyers") or []) < 5:
+                missing.append("fewer than five named buyers")
+            if len(str(d.get("first_message") or "")) < 40:
+                missing.append("no first message")
+        elif task.type == "outreach" and not d.get("messages"):
+            missing.append("no messages")
+        return missing
 
     def on_approved(self, ctx, task: Task, work: WorkProduct) -> list[str]:
         events: list[str] = []

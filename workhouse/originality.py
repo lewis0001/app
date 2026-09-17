@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from .models import OriginalityReport, TrendSignal
 
@@ -74,6 +74,7 @@ SLOP_REGISTRY: list[SlopPattern] = [
     SlopPattern("Prediction-market / crypto agent trading", "Polymarket bots, perps, arbitrage", ("polymarket", "prediction market", "perps", "hyperliquid")),
     SlopPattern("'AI-run company' as the product", "the novelty story is the business", ("first ai-run company", "run entirely by ai", "autonomous company as a service")),
     SlopPattern("AI UGC ads / virtual influencer / companion clone", "white-label companion, AI influencer ad generator", ("virtual influencer", "ugc ads", "ai ugc", "companion app")),
+    SlopPattern("Research-memo defaults (autumn 2026)", "what every research-informed agent factory pitches this season: Apify pay-per-event migration, Cloudflare pay-per-crawl setup, EU AI Act Art. 50 packs, saturation snapshots as data, a failure ledger as data, proof-of-human-action endpoints; examples are not answers", ("apify migration", "pay-per-event migration", "pay per crawl", "pay-per-crawl", "pay per use setup", "article 50 pack", "art. 50 pack", "saturation snapshot", "failure ledger as", "proof-of-human", "proof of human action")),
 ]
 
 
@@ -127,14 +128,19 @@ MIN_SCORE = 0.6
 REQUIRED_CHECKS = {"not_default", "not_slop", "revenue_rail_named", "not_platform_hostile", "why_not_1000_agents", "no_fresh_accounts", "ground_truth_verifiable", "far_from_twin", "outcome_priced"}
 
 
+# One boolean field per check key. Structured outputs cannot express free-form
+# dicts (they collapse to an empty object), so the keys are enumerated here.
+CheckResults = create_model("CheckResults", **{c.key: (bool, Field(description=c.question)) for c in CHECKS})  # type: ignore[call-overload]
+
+
 class GateOutput(BaseModel):
     """What the adversary LLM must return."""
 
     default_ai_would_build: str = Field(description="Concrete prediction of what a generic AI agent would produce from this brief: name, product, channel, price.")
     divergence: str = Field(description="Precisely how the idea differs from that prediction, and whether the difference matters to a buyer.")
     slop_relabels: list[str] = Field(default_factory=list, description="Any slop-registry pattern this idea is secretly a relabelled version of.")
-    check_results: dict[str, bool] = Field(description="One boolean per check key, judged strictly against the pass criteria.")
-    check_notes: dict[str, str] = Field(default_factory=dict, description="One line of justification per check key.")
+    check_results: CheckResults = Field(description="One boolean per check, judged strictly against the pass criteria.")  # type: ignore[valid-type]
+    check_notes: list[str] = Field(default_factory=list, description="One line per failed check: '<key>: why'.")
     freshness: float = Field(ge=0, le=1, description="1 if the trigger is brand new (weeks), 0 if evergreen.")
     crowding: float = Field(ge=0, le=1, description="1 if search results and app stores are already full of this, 0 if nobody is doing it.")
     verdict_reason: str = Field(description="One paragraph a human could read to understand the pass/fail.")
@@ -169,7 +175,8 @@ Return the gate output with a boolean for every check key."""
 
 
 def score(out: GateOutput, lexical_hits: list[str], crowding_floor: float | None = None) -> OriginalityReport:
-    results = {c.key: bool(out.check_results.get(c.key, False)) for c in CHECKS}
+    raw = out.check_results.model_dump() if hasattr(out.check_results, "model_dump") else dict(out.check_results)
+    results = {c.key: bool(raw.get(c.key, False)) for c in CHECKS}
     passed_n = sum(results.values())
     required_ok = all(results.get(k, False) for k in REQUIRED_CHECKS)
     slop = sorted(set(lexical_hits) | set(out.slop_relabels))
@@ -221,12 +228,14 @@ class Gate:
         self.operator_summary_fn = operator_summary_fn
         self.trends_fn = trends_fn
 
-    def evaluate(self, title: str, text: str, *, label: str = "gate", extra_patterns: list[str] | None = None, candidates_text: str = "", keywords: list[str] | None = None) -> OriginalityReport:
-        # Lexical screen runs on the idea only; the candidate list names generic
-        # ideas on purpose and must not count against the chosen one.
-        hits = slop_matches(title + " " + text)
+    def evaluate(self, title: str, text: str, *, label: str = "gate", extra_patterns: list[str] | None = None, candidates_text: str = "", keywords: list[str] | None = None, lexical_text: str | None = None) -> OriginalityReport:
+        # The lexical screen runs on the idea itself (name, thesis, customer,
+        # mechanism...). Fields that describe what a default agent would do, or
+        # the candidate list, name slop on purpose and must not count against it.
+        scan = lexical_text if lexical_text is not None else (title + " " + text)
+        hits = slop_matches(scan)
         if self.mirror is not None:
-            hits += self.mirror.matches(title + " " + text)
+            hits += self.mirror.matches(scan)
         prompt = gate_prompt(title, text, self.operator_summary_fn(), self.trends_fn(), hits)
         crowding_floor = None
         if self.mirror is not None:

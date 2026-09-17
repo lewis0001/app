@@ -37,7 +37,7 @@ You are reviewing a subordinate's work. Be the reviewer you would want: specific
 
 Rules:
 - First write what a generic AI agent would have produced from the same brief. Then judge the work against THAT. Work that matches the generic output is a failure even if polished.
-- Approve only work you would stake your own standing on. Approvals that get overturned by the Director count against you.
+- Approve only work you would stake your own standing on.
 - 'revise' when the core is right but specific things must change; list them as checkable items.
 - 'reject' when the approach itself is generic, unfounded, or unsellable; say what to do instead.
 - 'escalate' only when the decision needs money, publishing, legal exposure, or the Director's strategy call.
@@ -70,6 +70,8 @@ Return your review."""
 
 
 def reviewer_stats_note(reviewer: Agent, store: Store) -> str:
+    """Kept for the dashboard; no longer rendered into prompts, because a
+    reviewer that knows what its verdicts trigger mislabels (judge blinding)."""
     mine = store.reviews.where(reviewer_id=reviewer.id)
     if len(mine) < 4:
         return ""
@@ -113,6 +115,8 @@ def apply_review_outcome(store: Store, review: Review, author: Agent, reviewer: 
         author.stats.rejections += 1
         author.stats.streak = min(0, author.stats.streak) - 1
     reviewer.stats.reviews_given += 1
+    # calibration: every review given lets an earlier overturn fade
+    reviewer.stats.reviewer_error_rate = round(reviewer.stats.reviewer_error_rate * 0.85, 4)
     for s in signals:
         emotions.receive(author, s)
         store.signals.put(s)
@@ -129,8 +133,7 @@ def overturn(store: Store, earlier: Review, later: Review, tick: int) -> Signal 
     reviewer = store.agents.get(earlier.reviewer_id)
     if not reviewer:
         return None
-    n = max(1, reviewer.stats.reviews_given)
-    reviewer.stats.reviewer_error_rate = round(min(1.0, reviewer.stats.reviewer_error_rate * (n - 1) / n + 1.0 / n), 4)
+    reviewer.stats.reviewer_error_rate = round(min(1.0, reviewer.stats.reviewer_error_rate + 0.3), 4)
     sig = Signal(agent_id=reviewer.id, kind=SignalKind.negative, magnitude=0.5, source="calibration", reason=f"your approval of '{earlier.work_product_id}' was overturned", tick=tick)
     emotions.receive(reviewer, sig)
     store.signals.put(sig)

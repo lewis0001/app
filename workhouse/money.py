@@ -26,11 +26,15 @@ log = logging.getLogger("workhouse.money")
 class Ledger:
     def __init__(self, store: Store):
         self.store = store
+        self.last_was_new = False
 
     def record(self, kind: LedgerKind, amount_cents: int, *, venture_id: str | None = None, agent_id: str | None = None, source: str = "", memo: str = "", external_ref: str = "", tick: int = 0) -> LedgerEntry:
-        if external_ref and self.store.ledger.first(external_ref=external_ref):
+        existing = self.store.ledger.first(external_ref=external_ref) if external_ref else None
+        if existing is not None:
             # idempotent: a connector may report the same charge twice
-            return self.store.ledger.first(external_ref=external_ref)  # type: ignore[return-value]
+            self.last_was_new = False
+            return existing
+        self.last_was_new = True
         entry = LedgerEntry(kind=kind, amount_cents=int(amount_cents), venture_id=venture_id, agent_id=agent_id, source=source, memo=memo, external_ref=external_ref, tick=tick)
         self.store.ledger.put(entry)
         if venture_id:
@@ -327,7 +331,9 @@ class Rails:
                 for ev in c.poll(tick=tick):
                     if ev["amount_cents"] <= 0:
                         continue
-                    entries.append(self.ledger.revenue(ev["amount_cents"], venture_id=ev.get("venture_id"), source=c.name, memo=ev.get("memo", ""), external_ref=ev.get("external_ref", ""), tick=tick))
+                    entry = self.ledger.revenue(ev["amount_cents"], venture_id=ev.get("venture_id"), source=c.name, memo=ev.get("memo", ""), external_ref=ev.get("external_ref", ""), tick=tick)
+                    if self.ledger.last_was_new:  # only fresh money produces signals
+                        entries.append(entry)
             except Exception as e:  # network or auth problems must not stop the factory
                 log.warning("connector %s poll failed: %s", c.name, e)
         return [e for e in entries if e is not None]

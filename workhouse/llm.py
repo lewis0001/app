@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Literal, TypeVar, get_args, get_origin
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .config import Settings, estimate_cost_usd
 
@@ -47,18 +47,18 @@ class Usage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cost_usd: float = 0.0
-    # Per-call cost records: (agent_label, cost) so the engine can attribute.
-    records: list[tuple[str, float]] = field(default_factory=list)
+    # Per-call cost records: (label, venture_id, cost) so the engine can attribute.
+    records: list[tuple[str, str | None, float]] = field(default_factory=list)
 
-    def add(self, label: str, inp: int, out: int, cache_read: int, cost: float) -> None:
+    def add(self, label: str, inp: int, out: int, cache_read: int, cost: float, venture_id: str | None = None) -> None:
         self.calls += 1
         self.input_tokens += inp
         self.output_tokens += out
         self.cache_read_tokens += cache_read
         self.cost_usd += cost
-        self.records.append((label, cost))
+        self.records.append((label, venture_id, cost))
 
-    def drain(self) -> list[tuple[str, float]]:
+    def drain(self) -> list[tuple[str, str | None, float]]:
         recs, self.records = self.records, []
         return recs
 
@@ -81,12 +81,13 @@ class LLM:
         label: str = "agent",
         max_tokens: int | None = None,
         model: str | None = None,
+        venture_id: str | None = None,
     ) -> T:
         if effort not in EFFORT_LEVELS:
             effort = "high"
-        return self._complete(system, user, schema, effort=effort, web_search=web_search, label=label, max_tokens=max_tokens, model=model)
+        return self._complete(system, user, schema, effort=effort, web_search=web_search, label=label, max_tokens=max_tokens, model=model, venture_id=venture_id)
 
-    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None) -> T:  # pragma: no cover - abstract
+    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None, venture_id: str | None = None) -> T:  # pragma: no cover - abstract
         raise NotImplementedError
 
 
@@ -96,6 +97,14 @@ class LLM:
 
 
 class AnthropicLLM(LLM):
+    """Live gateway.
+
+    Uses `beta.messages.create` with a JSON-schema output format and parses
+    the final text block itself, so usage is recorded before any parsing can
+    fail, refusals and truncation are handled explicitly, and narration text
+    blocks around server-tool calls (web search) do not break parsing.
+    """
+
     FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
     def __init__(self, settings: Settings):
@@ -104,49 +113,69 @@ class AnthropicLLM(LLM):
 
         self._anthropic = anthropic
         self._client = anthropic.Anthropic()
+        if not (getattr(self._client, "api_key", None) or getattr(self._client, "auth_token", None)):
+            raise RuntimeError("no Anthropic credential: set ANTHROPIC_API_KEY (or run `ant auth login`)")
+        from anthropic.lib._parse._transform import transform_schema
 
-    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None) -> T:
+        self._transform_schema = transform_schema
+
+    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None, venture_id: str | None = None) -> T:
         anthropic = self._anthropic
+        from .config import FALLBACK_MODELS
+
         model = model or self.settings.model
         kwargs: dict[str, Any] = dict(
             model=model,
             max_tokens=max_tokens or self.settings.max_tokens,
-            # Stable prefix first so the cache hits across agents sharing a system prompt.
+            # Stable prefix first so the cache hits across calls sharing a system prompt.
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user}],
             thinking={"type": "adaptive"},
-            output_config={"effort": effort},
-            output_format=schema,
-            fallbacks="default",
-            betas=[self.FALLBACK_BETA],
+            output_config={"effort": effort, "format": {"type": "json_schema", "schema": self._transform_schema(schema.model_json_schema())}},
         )
+        if model in FALLBACK_MODELS:
+            kwargs["fallbacks"] = "default"
+            kwargs["betas"] = [self.FALLBACK_BETA]
         if web_search and self.settings.web_search:
             kwargs["tools"] = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
         try:
-            response = self._client.beta.messages.parse(**kwargs)
+            response = self._client.beta.messages.create(**kwargs)
         except anthropic.RateLimitError as e:  # SDK already retried
             raise RuntimeError(f"rate limited: {e}") from e
         except anthropic.APIStatusError as e:
             raise RuntimeError(f"api error {e.status_code}: {e.message}") from e
         except anthropic.APIConnectionError as e:
             raise RuntimeError(f"connection error: {e}") from e
+        except TypeError as e:  # missing credential surfaces here in the SDK
+            raise RuntimeError(f"credential error: {e}") from e
 
+        # usage first: money was spent whatever the content looks like
         usage = getattr(response, "usage", None)
         inp = int(getattr(usage, "input_tokens", 0) or 0)
         out = int(getattr(usage, "output_tokens", 0) or 0)
         cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-        cost = estimate_cost_usd(model, inp, out, cache_read)
-        self.usage.add(label, inp, out, cache_read, cost)
+        cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        stu = getattr(usage, "server_tool_use", None)
+        searches = int(getattr(stu, "web_search_requests", 0) or 0) if stu is not None else 0
+        served_model = str(getattr(response, "model", None) or model)
+        cost = estimate_cost_usd(served_model, inp, out, cache_read, cache_write, searches)
+        self.usage.add(label, inp, out, cache_read, cost, venture_id=venture_id)
 
         if response.stop_reason == "refusal":
             details = getattr(response, "stop_details", None)
             raise LLMRefusal(f"refused ({getattr(details, 'category', None)}): {getattr(details, 'explanation', '')}")
-        parsed = getattr(response, "parsed_output", None)
-        if parsed is not None:
-            return parsed
-        # Fallback: the model answered with text; try to recover JSON from it.
-        text = "".join(getattr(b, "text", "") for b in response.content if getattr(b, "type", "") == "text")
-        return schema.model_validate(_extract_json(text))
+        if response.stop_reason == "max_tokens":
+            raise RuntimeError("output truncated at max_tokens; raise WORKHOUSE_MAX_TOKENS or shorten the task")
+        texts = [getattr(b, "text", "") for b in response.content if getattr(b, "type", "") == "text" and getattr(b, "text", "").strip()]
+        if not texts:
+            raise RuntimeError("model returned no text block")
+        # The JSON answer is the final text block; earlier ones are narration around tool use.
+        for text in reversed(texts):
+            try:
+                return schema.model_validate(_extract_json(text))
+            except (ValueError, ValidationError):
+                continue
+        raise RuntimeError("model output did not match the schema")
 
 
 def _extract_json(text: str) -> Any:
@@ -186,11 +215,11 @@ class MockLLM(LLM):
         self.examples: dict[type[BaseModel], Callable[[int, str], BaseModel]] = dict(examples or {})
         self.calls: list[dict[str, Any]] = []
 
-    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None) -> T:
+    def _complete(self, system: str, user: str, schema: type[T], *, effort: str, web_search: bool, label: str, max_tokens: int | None, model: str | None = None, venture_id: str | None = None) -> T:
         seed = int(hashlib.sha256((schema.__name__ + "\n" + user).encode()).hexdigest()[:12], 16)
         self.calls.append({"label": label, "schema": schema.__name__, "effort": effort, "web_search": web_search, "user": user[:400]})
         # Pretend each call costs a little so budget logic is exercised.
-        self.usage.add(label, 1200, 400, 0, 0.001)
+        self.usage.add(label, 1200, 400, 0, 0.001, venture_id=venture_id)
         maker = self.examples.get(schema)
         if maker is not None:
             result = maker(seed, user)
@@ -199,14 +228,39 @@ class MockLLM(LLM):
         return fake_instance(schema, seed, user)
 
 
+def _bounds(field: Any) -> tuple[float | None, float | None]:
+    lo = hi = None
+    for m in getattr(field, "metadata", []) or []:
+        if hasattr(m, "ge"):
+            lo = float(m.ge)
+        if hasattr(m, "gt"):
+            lo = float(m.gt) + 1e-9
+        if hasattr(m, "le"):
+            hi = float(m.le)
+        if hasattr(m, "lt"):
+            hi = float(m.lt) - 1e-9
+    return lo, hi
+
+
+def _clamp_numeric(value: Any, field: Any) -> Any:
+    lo, hi = _bounds(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    if lo is not None and value < lo:
+        value = type(value)(lo) if isinstance(value, int) and float(lo).is_integer() else lo
+    if hi is not None and value > hi:
+        value = type(value)(hi) if isinstance(value, int) and float(hi).is_integer() else hi
+    return value
+
+
 def fake_instance(schema: type[T], seed: int, context: str = "") -> T:
     """Construct a plausible instance of any pydantic model deterministically."""
     rng = _Rng(seed)
-    data = {name: _fake_value(f.annotation, name, rng, context) for name, f in schema.model_fields.items() if f.is_required() or rng.chance(0.8)}
+    data = {name: _clamp_numeric(_fake_value(f.annotation, name, rng, context), f) for name, f in schema.model_fields.items() if f.is_required() or rng.chance(0.8)}
     # Required fields must always be present.
     for name, f in schema.model_fields.items():
         if f.is_required() and name not in data:
-            data[name] = _fake_value(f.annotation, name, rng, context)
+            data[name] = _clamp_numeric(_fake_value(f.annotation, name, rng, context), f)
     return schema.model_validate(data)
 
 

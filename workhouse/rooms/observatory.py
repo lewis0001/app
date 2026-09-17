@@ -3,6 +3,8 @@ is obvious, and to keep the company honest about what other agents are doing.
 """
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
 
 from ..models import Task, TrendSignal, WorkProduct
@@ -77,9 +79,11 @@ class Observatory(Room):
         for i, scout in enumerate(scouts):
             if len(open_scans) + len(tasks) >= max(1, len(scouts)):
                 break
-            beat, desc = BEATS[(ctx.tick + i) % len(BEATS)]
+            if not ctx.every(1, offset=i):  # one scan per scout per day, staggered
+                continue
+            beat, desc = BEATS[(ctx.tick // max(1, ctx.days_to_ticks(1)) + i) % len(BEATS)]
             tasks.append(Task(room=self.key, type="scan_trends", title=f"Scan: {beat} (tick {ctx.tick})", brief=f"Beat: {beat}. Look for: {desc}. Return dated findings with freshness, crowding, exploitability and a buyer.", created_by="system", priority=4, inputs={"beat": beat}))
-        if ctx.tick % 6 == 1 and not any(t.type == "slop_watch" for t in ctx.open_tasks(self.key)):
+        if ctx.every(7, offset=1) and not any(t.type == "slop_watch" for t in ctx.open_tasks(self.key)):
             tasks.append(Task(room=self.key, type="slop_watch", title=f"Slop watch (tick {ctx.tick})", brief="What are AI agents and 'AI side hustle' operators visibly building right now? List concrete patterns so the company can avoid them, and note which platforms are pushing back.", created_by="system", priority=5))
         for t in ctx.top_trends(3):
             if t.opportunity >= 0.3 and t.status == "new" and not ctx.task_exists(f"Deep dive: {t.title}"):
@@ -94,6 +98,22 @@ class Observatory(Room):
 
     def task_prompt(self, ctx, agent, task: Task) -> str:
         return f"TASK ({task.type}): {task.title}\n{task.brief}\n\nExisting trends on record (do not duplicate; add new or update with evidence):\n" + ("\n".join(f"- {t.title}" for t in ctx.top_trends(12)) or "(none)")
+
+    def precheck(self, task: Task, work: WorkProduct) -> list[str]:
+        if task.type != "scan_trends":
+            return []
+        trends = work.data.get("trends") or []
+        missing: list[str] = []
+        if not trends:
+            missing.append("no findings reported")
+        for t in trends:
+            if not isinstance(t, dict):
+                continue
+            if not t.get("source_urls"):
+                missing.append(f"'{str(t.get('title'))[:40]}' has no source URL")
+            if not re.match(r"^20\d\d-\d\d", str(t.get("first_seen") or "")):
+                missing.append(f"'{str(t.get('title'))[:40]}' is not dated (YYYY-MM)")
+        return missing[:4]
 
     def on_approved(self, ctx, task: Task, work: WorkProduct) -> list[str]:
         events: list[str] = []

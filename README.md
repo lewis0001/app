@@ -189,17 +189,36 @@ approval; `WORKHOUSE_AUTONOMOUS_SPEND_CENTS` sets what the company may commit
 on its own (default 0).
 
 Venture lifecycle: idea → gated → validating → building → launched → earning
-→ scaling, or killed. Kill rules are mechanical so no agent can argue its way
-out: not launched within 12 ticks of passing the gate, no revenue within 20
-ticks of launch, or no revenue for 15 ticks while earning. The Ledger Room's
-P&L review can also recommend kills, which the Director must approve.
+→ scaling, or killed. Kill rules are mechanical and written in days so no
+agent can argue its way out: not launched within 7 days of passing the gate,
+no revenue within 14 days of launch, no revenue for 21 days while earning, or
+the pitch's own pre-registered kill date. Days are converted to ticks once,
+from `WORKHOUSE_TICK_SECONDS` (offline, one tick is one simulated day; live,
+a tick is ten minutes and most ticks make no LLM call at all, because every
+room's work runs on a daily or weekly cadence). Kill clocks stop while the
+factory is paused. The Ledger Room's P&L review can also recommend kills,
+which the Director must approve, and the operator declining a launch kills
+the venture.
+
+Every work product passes a code-only evidence check before any reviewer
+sees it: scans need dated findings with sources, pitches need five
+candidates, a dated trigger, keywords and an outcome price, demand tests
+need external evidence from ten or more contacts, builds need a price and a
+deliverable, launch plans need named buyers and a first message. Missing
+evidence sends the work back without spending a review call. LLM spend is
+charged per venture, the spend cap and pause state survive restarts, and
+reviewers are blinded to what their verdicts trigger.
 
 ## The dashboard
 
 `python -m workhouse dashboard` serves one page:
 
 - **Airlock**: open requests sorted by priority, each with the fields to
-  fill, submit and dismiss;
+  fill, the money at stake, and a one-line "if you do nothing" so silence is
+  a decision you understand; submit and dismiss (a dismissal counts as a
+  decline);
+- **Twin vs Factory**: what the Default Twin would build this week next to
+  what the factory built and earned;
 - rooms with every agent's mood, valence bar, streak, performance, and
   praise/criticise buttons;
 - ventures with stage, rail, gate score, revenue, cost and milestones;
@@ -221,10 +240,15 @@ export WORKHOUSE_TICK_SECONDS=600          # ten minutes between ticks
 python -m workhouse dashboard              # then press "Start auto-run"
 ```
 
-Live mode uses `claude-opus-5` with adaptive thinking, structured outputs,
-server-side refusal fallbacks, prompt caching on each agent's stable system
-prompt, and the web-search server tool for the Observatory, pitches,
-validation and launch planning. Effort per call is set by the agent's
+Live mode uses `claude-opus-5` with adaptive thinking, JSON-schema
+structured outputs (parsed from the final text block so narration around
+web-search calls is tolerated), server-side refusal fallbacks, prompt caching
+on each agent's stable system prompt, and the web-search server tool for the
+Observatory, pitches, validation and launch planning. Usage is recorded
+before parsing, so refusals and truncation are still charged. Supported
+models are validated at startup; the reviewer model may differ from the
+drafters' (`WORKHOUSE_REVIEW_MODEL`), and reviewers of a pitch also see what
+a default agent pitched from the same brief. Effort per call is set by the agent's
 emotional state (`WORKHOUSE_EFFORT` is the floor). Spend is estimated from
 usage and charged to the ledger every tick; `WORKHOUSE_MAX_TICK_COST_USD`
 caps a single tick.

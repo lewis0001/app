@@ -70,6 +70,13 @@
       <div class="rooms" id="rooms"></div>
     </section>
     <section>
+      <h2>Twin vs Factory <span class="muted small">what our own model builds when just told "make money", next to what we built and earned</span></h2>
+      <div class="grid2">
+        <div><div class="small muted" style="margin-bottom:4px">THE DEFAULT TWIN WOULD BUILD</div><div id="twin" class="small"></div></div>
+        <div><div class="small muted" style="margin-bottom:4px">THE FACTORY BUILT</div><div id="factory" class="small"></div></div>
+      </div>
+    </section>
+    <section>
       <h2>Ventures</h2>
       <table><thead><tr><th>Name</th><th>Stage</th><th>Rail</th><th>Gate</th><th>Revenue</th><th>Cost</th><th>Thesis</th></tr></thead><tbody id="ventures"></tbody></table>
     </section>
@@ -146,7 +153,7 @@ async function refresh() {
 
 function render() {
   const s = state;
-  $('tick').textContent = s.tick;
+  $('tick').textContent = s.tick + (s.ticks_per_day > 1 ? ' (' + (s.tick / s.ticks_per_day).toFixed(1) + ' d)' : ' d');
   $('revenue').textContent = usd(s.ledger.revenue_cents);
   $('profit').textContent = usd(s.ledger.profit_cents);
   $('llm').textContent = '$' + s.llm.cost_usd.toFixed(2) + ' / $' + s.llm.cap_usd.toFixed(0);
@@ -171,7 +178,8 @@ function render() {
     }
     if (!r.fields.length) fields = `<label>Your answer</label><textarea id="f_${r.id}_answer"></textarea>`;
     div.innerHTML = `<h4>${esc(r.title)} <span class="tag">${esc(r.type)}</span> <span class="tag ${r.priority<=1?'bad':(r.priority<=2?'warn':'')}">priority ${r.priority}</span></h4>
-      <div class="meta">requested at tick ${r.tick} by ${esc(agentName(r.requested_by))}${r.why_it_matters ? ' · ' + esc(r.why_it_matters) : ''}</div>
+      <div class="meta">requested at tick ${r.tick} by ${esc(agentName(r.requested_by))}${r.why_it_matters ? ' · ' + esc(r.why_it_matters) : ''}${r.money_impact_cents ? ' · money at stake ' + usd(r.money_impact_cents) : ''}</div>
+      <div class="meta">If you do nothing: ${esc(r.if_ignored || 'the agents wait.')}</div>
       <pre>${esc(r.description)}</pre>${fields}
       <div class="pill-row" style="margin-top:8px;"><button class="primary" onclick="resolve('${r.id}')">Submit</button><button onclick="dismiss('${r.id}')">Dismiss</button></div>`;
     $('airlock').appendChild(div);
@@ -197,6 +205,12 @@ function render() {
       </div>`).join('');
     $('rooms').appendChild(div);
   }
+
+  // twin vs factory
+  const twin = s.default_twin || {};
+  $('twin').innerHTML = (twin.ideas || []).length ? '<ol style="margin:0; padding-left:18px">' + twin.ideas.slice(0, 8).map(i => `<li>${esc(i)}</li>`).join('') + '</ol>' : '<span class="muted">Not generated yet (first tick).</span>';
+  const built = s.ventures.filter(v => v.stage !== 'idea');
+  $('factory').innerHTML = built.length ? '<ol style="margin:0; padding-left:18px">' + built.map(v => `<li><b>${esc(v.name)}</b> <span class="tag ${v.stage==='killed'?'bad':(['earning','scaling'].includes(v.stage)?'good':'')}">${v.stage}</span> ${v.revenue_cents ? '<span class="tag good">'+usd(v.revenue_cents)+'</span>' : ''} <span class="muted">gate ${v.originality ? v.originality.score.toFixed(2) : '-'}</span></li>`).join('') + '</ol>' : '<span class="muted">Nothing has passed the gate yet.</span>';
 
   // ventures
   $('ventures').innerHTML = s.ventures.length ? s.ventures.map(v => `<tr><td><b>${esc(v.name)}</b><br><span class="muted small">${esc(v.id)}</span></td><td><span class="tag ${v.stage==='killed'?'bad':(['earning','scaling'].includes(v.stage)?'good':'')}">${v.stage}</span></td><td>${esc(v.revenue_rail)}</td><td>${v.originality ? v.originality.score.toFixed(2) : '-'}</td><td>${usd(v.revenue_cents)}</td><td>${usd(v.cost_cents)}</td><td class="small">${esc(v.thesis).slice(0,220)}${v.kill_reason?'<br><span class="tag bad">'+esc(v.kill_reason).slice(0,120)+'</span>':''}<details><summary>milestones</summary>${v.milestones.map(m=>'<div class="small muted">'+esc(m)+'</div>').join('')}</details></td></tr>`).join('') : '<tr><td colspan="7" class="muted">No ventures yet. The Forge pitches once the Observatory has trends.</td></tr>';

@@ -93,12 +93,10 @@ def behaviour(e: Emotion, base_effort: str = "high") -> Behaviour:
     idx = order.index(base_effort) if base_effort in order else 2
     # Negative affect and pressure push the agent to try harder next time.
     if e.stress >= 0.5 or e.valence <= -0.3 or e.confidence <= 0.4:
-        idx = min(len(order) - 2, idx + 1)  # cap at xhigh
+        idx = min(len(order) - 1, idx + 1)  # one notch up, never below the configured floor
     complacent = e.confidence >= 0.85 and e.stress <= 0.15 and e.valence >= 0.5
     risk = 0.5 + 0.30 * e.valence + 0.25 * (e.confidence - 0.5) - 0.20 * e.stress
-    # Desperation: very stressed and discouraged agents start gambling.
-    if e.stress >= 0.8 and e.valence <= -0.5:
-        risk += 0.25
+    # No desperation term: penalty-blind gambling is exactly the failure mode induced anger produces.
     thoroughness = 0.55 + 0.35 * e.stress + 0.15 * (0.5 - e.valence) - (0.2 if complacent else 0.0)
     return Behaviour(
         effort=order[idx],
@@ -130,7 +128,7 @@ def render_state(agent: Agent, base_effort: str = "high") -> str:
     if mood in {"energised", "content"}:
         consequences.append("You are on a good run. Use that: take a bolder, less obvious line, and offer a concrete tip to a teammate in your message.")
     if b.complacent:
-        consequences.append("Warning: your numbers say you are coasting. Reviewers have been told to look harder at your work. Do not recycle a previous approach.")
+        consequences.append("Your numbers say you are coasting. Do not recycle a previous approach; pick the option you have not tried.")
     if b.risk_appetite >= 0.7:
         consequences.append("Risk appetite is high: prefer the unproven, early-mover option over the safe one, but say what would falsify it.")
     elif b.risk_appetite <= 0.3:

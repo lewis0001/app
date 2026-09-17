@@ -50,7 +50,9 @@ def test_airlock_roundtrip_configures_rail_and_revenue_signals(engine):
     air.resolve(r.id, {"amount_usd": "12.5", "memo": "test"}, tick=2)
     engine.run_tick()
     v2 = engine.store.ventures.get(v.id)
-    assert v2.revenue_cents == 1250 and v2.stage == VentureStage.earning
+    assert v2.revenue_cents == 1250
+    # it reached 'earning' on the first dollar (a later mock P&L review may kill it; that is allowed)
+    assert any("first revenue" in m for m in v2.milestones) and v2.stage in (VentureStage.earning, VentureStage.killed)
     assert any(sg.source == "revenue" for sg in engine.store.signals.all())
 
 

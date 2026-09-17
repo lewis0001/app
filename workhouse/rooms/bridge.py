@@ -42,9 +42,7 @@ class Bridge(Room):
         super().__init__(SPEC)
 
     def plan(self, ctx) -> list[Task]:
-        from ..engine import DIRECTOR_PLANS_EVERY
-
-        if (ctx.tick == 1 or ctx.tick % DIRECTOR_PLANS_EVERY == 0) and not any(t.type == "strategy" for t in ctx.open_tasks(self.key)):
+        if (ctx.tick == 1 or ctx.every(2)) and not any(t.type == "strategy" for t in ctx.open_tasks(self.key)):
             return [Task(room=self.key, type="strategy", title=f"Strategy cycle {ctx.tick}", brief="Set direction for the next cycle from the trends, portfolio, ledger and the operator's assets.", created_by="system", priority=1)]
         return []
 

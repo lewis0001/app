@@ -16,6 +16,17 @@ from .store import Store
 # rest are deferred (kept as tasks/messages) instead of flooding the queue.
 MAX_NEW_PER_TICK = 4
 
+DEFAULT_IF_IGNORED: dict[str, str] = {
+    "connect_rail": "The venture stays unpaid; it will be killed at its deadline.",
+    "approve_spend": "No money is spent; the venture continues without budget.",
+    "approve_publish": "Nothing is published; the venture stalls and dies at its deadline.",
+    "raise_cap": "The factory stays paused.",
+    "decision": "The task stays blocked and is cancelled when its venture dies.",
+    "manual_action": "The agents proceed without that step and note it as not done.",
+    "operator_asset": "The agents plan without your assets, which makes them more like every other agent.",
+    "enter_revenue": "The ledger stays as it is.",
+}
+
 REQUEST_TYPES: dict[str, dict[str, Any]] = {
     "connect_rail": {"label": "Connect a revenue rail", "priority": 1},
     "approve_spend": {"label": "Approve spending money", "priority": 1},
@@ -37,7 +48,7 @@ class Airlock:
         self._last_tick = -1
         self._new_this_tick = 0
 
-    def request(self, type: str, title: str, description: str, *, fields: list[AirlockField] | None = None, why_it_matters: str = "", venture_id: str | None = None, task_id: str | None = None, requested_by: str = "system", tick: int = 0, priority: int | None = None, dedupe_key: str | None = None, meta: dict[str, Any] | None = None) -> AirlockRequest:
+    def request(self, type: str, title: str, description: str, *, fields: list[AirlockField] | None = None, why_it_matters: str = "", venture_id: str | None = None, task_id: str | None = None, requested_by: str = "system", tick: int = 0, priority: int | None = None, dedupe_key: str | None = None, meta: dict[str, Any] | None = None, if_ignored: str = "", money_impact_cents: int = 0) -> AirlockRequest:
         if type not in REQUEST_TYPES:
             type = "decision"
         # Do not spam the human with the same open request.
@@ -61,6 +72,8 @@ class Airlock:
             task_id=task_id,
             requested_by=requested_by,
             priority=priority if priority is not None else REQUEST_TYPES[type]["priority"],
+            if_ignored=if_ignored or DEFAULT_IF_IGNORED.get(type, "The agents wait; nothing happens until you answer."),
+            money_impact_cents=money_impact_cents,
             tick=tick,
             response={"_dedupe": key, **{f"_{k}": v for k, v in (meta or {}).items()}},
         )
@@ -93,8 +106,8 @@ class Airlock:
         return self.store.airlock.put(req)
 
     def unconsumed(self) -> list[AirlockRequest]:
-        """Resolved requests the engine has not yet acted on."""
-        return self.store.airlock.where(lambda r: r.status == AirlockStatus.resolved and not r.response.get("_consumed"))
+        """Resolved or dismissed requests the engine has not yet acted on."""
+        return self.store.airlock.where(lambda r: r.status in (AirlockStatus.resolved, AirlockStatus.dismissed) and not r.response.get("_consumed"))
 
     def mark_consumed(self, req: AirlockRequest) -> None:
         req.response["_consumed"] = True

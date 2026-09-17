@@ -46,9 +46,13 @@ class Org:
         return self.store.agents.first(room=room, rank=Rank.head)
 
     def manager_of(self, agent: Agent) -> Agent | None:
+        if agent.rank == Rank.worker:
+            head = self.head_of(agent.room)
+            if head and head.id != agent.id:
+                return head
         if agent.manager_id:
             m = self.store.agents.get(agent.manager_id)
-            if m:
+            if m and m.id != agent.id and m.rank.value < agent.rank.value:
                 return m
         if agent.rank == Rank.worker:
             return self.head_of(agent.room)
@@ -109,7 +113,9 @@ class Org:
         """Adjust status/rank from performance. Returns an event string or None."""
         p = agent.stats.performance
         done = agent.stats.tasks_completed
-        if agent.rank == Rank.worker and agent.status == "on_probation" and p >= PROBATION_PERFORMANCE + 0.15:
+        if agent.rank == Rank.ceo:
+            return None  # the Director is the escalation endpoint; it is challenged, not disciplined
+        if agent.status == "on_probation" and p >= PROBATION_PERFORMANCE + 0.15:
             agent.status = "active"
             return f"{agent.name} is off probation (performance {p:.2f})."
         if agent.status == "active" and p <= PROBATION_PERFORMANCE and done >= 3:
@@ -124,10 +130,17 @@ class Org:
         if agent.status == "on_probation" and p <= DEMOTE_PERFORMANCE and done >= 5:
             if agent.rank == Rank.head:
                 agent.rank = Rank.worker
+                agent.status = "on_probation"
                 room = self.store.rooms.get(agent.room)
                 if room and room.head_id == agent.id:
                     room.head_id = None
                     self.store.rooms.put(room)
+                director = self.director()
+                agent.manager_id = director.id if director else None
+                for w in self.store.agents.where(room=agent.room):
+                    if w.id != agent.id and w.manager_id == agent.id:
+                        w.manager_id = director.id if director else None
+                        self.store.agents.put(w)
                 return f"{agent.name} steps down from Head of {agent.room} to worker (reduced scope)."
             agent.status = "suspended"
             return f"{agent.name} paused for mentoring after sustained poor performance (restored next cycle)."
@@ -138,6 +151,10 @@ class Org:
                 agent.manager_id = (self.director() or agent).id
                 room.head_id = agent.id
                 self.store.rooms.put(room)
+                for w in self.store.agents.where(room=agent.room):
+                    if w.id != agent.id and w.rank == Rank.worker:
+                        w.manager_id = agent.id
+                        self.store.agents.put(w)
                 return f"{agent.name} promoted to Head of {agent.room}."
         return None
 
